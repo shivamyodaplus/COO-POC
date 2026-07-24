@@ -1,0 +1,57 @@
+
+====================================================================================================
+TEMPLATE RETRIEVAL TEST REPORT
+====================================================================================================
+
+TEST CONFIGURATION:
+  - Template pages indexed: 12
+  - Query pages evaluated: 3
+  - Retrieval depth: top-2
+  - Distance metric: cosine
+  - ChromaDB collections: Separate for each model
+  - Device: cuda
+
+KEY FINDINGS:
+====================================================================================================
+
+1. TOP-1 RETRIEVAL SCORE:
+   - DINOv2 (Image-only): 0.653888
+   - Qwen3-VL-Embedding (Multimodal): 0.603575
+   - Winner: DINOv2
+
+2. TOP-2 AVERAGE RETRIEVAL SCORE:
+   - DINOv2 (Image-only): 0.633834
+   - Qwen3-VL-Embedding (Multimodal): 0.586374
+   - Winner: DINOv2
+
+3. DISCRIMINABILITY (Similarity Spread Across Top-2 Retrieved Templates):
+   - DINOv2: 0.020055
+   - Qwen3-VL-Embedding: 0.017202
+   - Winner: DINOv2
+
+4. TOP-1 AGREEMENT BETWEEN MODELS:
+   - Shared top template: 0/3 query pages
+
+====================================================================================================
+RECOMMENDATIONS:
+====================================================================================================
+
+MODEL SELECTION GUIDANCE:
+
+• DINOv2 (facebook/dinov2-giant):
+  - Best for: Pure visual template similarity
+  - Strengths: Focused image representation for layout and appearance matching
+  - Use case: Template lookup from scanned documents or form pages
+
+• Qwen3-VL-Embedding:
+  - Best for: Multimodal retrieval with broader semantic understanding
+  - Strengths: Can capture both visual and semantic cues from documents
+  - Use case: Template retrieval where both layout and content matter
+
+DEPLOYMENT NOTES:
+  - Template PDFs are embedded page-by-page as separate images
+  - Query files are loaded from test/ and used individually for retrieval
+  - Each retrieval shows the top-2 matching template pages
+  - ChromaDB is used with cosine distance for persistent retrieval
+
+====================================================================================================
