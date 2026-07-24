@@ -1,0 +1,8 @@
+*/.venv
+*/venv
+venv
+.venv
+*.bin
+*/chroma_layout_db
+
+
