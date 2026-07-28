@@ -4,5 +4,6 @@ venv
 .venv
 *.bin
 */chroma_layout_db
-
-
+*/*.png
+*.png
+*.sqlite3
