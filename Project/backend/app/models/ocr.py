@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import list
 
 import numpy as np
 import torch
@@ -42,7 +42,7 @@ def extract_text(image: Image.Image) -> str:
         return ""
     try:
         result = _ocr.predict(np.array(image))
-        chunks: List[str] = []
+        chunks: list[str] = []
         for res in result:
             rec_texts = getattr(res, "rec_texts", None)
             if rec_texts is None and isinstance(res, dict):

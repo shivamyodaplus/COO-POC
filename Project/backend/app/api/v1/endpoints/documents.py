@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -12,9 +13,9 @@ router = APIRouter()
 
 @router.post("/upload")
 async def upload(
-    file: UploadFile = File(...),
-    country: str = Form(...),
-    doc_type: str = Form(...),
+    file: Annotated[UploadFile, File()],
+    country: Annotated[str, Form()],
+    doc_type: Annotated[str, Form()],
 ):
     contents = await file.read()
     try:
@@ -32,10 +33,10 @@ async def upload(
 
 @router.post("/retrieve")
 async def retrieve(
-    file: UploadFile = File(...),
-    country: str | None = Form(None),
-    doc_type: str | None = Form(None),
-    top_k: int = Form(3),
+    file: Annotated[UploadFile, File()],
+    country: Annotated[str | None, Form()] = None,
+    doc_type: Annotated[str | None, Form()] = None,
+    top_k: Annotated[int, Form()] = 3,
 ):
     contents = await file.read()
     try:

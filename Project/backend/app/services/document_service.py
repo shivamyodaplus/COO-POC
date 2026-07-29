@@ -7,7 +7,7 @@ from typing import Any
 from app.models.embedding import embed_image
 from app.models.ocr import extract_text
 from app.services import milvus_service
-from app.utils.image_processing import SUPPORTED_EXTENSIONS, load_document_pages, preprocess_image
+from app.utils.image_processing import load_document_pages, preprocess_image, SUPPORTED_EXTENSIONS
 
 IMAGE_DIR = Path("/app/images")
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)

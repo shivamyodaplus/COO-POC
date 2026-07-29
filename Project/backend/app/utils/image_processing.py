@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import list
 
 import cv2
 import numpy as np
@@ -11,12 +11,12 @@ from PIL import Image
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif", ".webp"}
 
 
-def render_pdf_pages(pdf_path: Path, scale: float = 2.0) -> List[Image.Image]:
+def render_pdf_pages(pdf_path: Path, scale: float = 2.0) -> list[Image.Image]:
     document = pdfium.PdfDocument(str(pdf_path))
     return [page.render(scale=scale).to_pil().convert("RGB") for page in document]
 
 
-def load_document_pages(file_path: Path) -> List[Image.Image]:
+def load_document_pages(file_path: Path) -> list[Image.Image]:
     suffix = file_path.suffix.lower()
     if suffix == ".pdf":
         return render_pdf_pages(file_path)
