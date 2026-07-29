@@ -6,6 +6,8 @@ import numpy as np
 import torch
 from PIL import Image
 
+from app.core.logger import get_logger
+
 try:
     from paddleocr import PaddleOCR
     _PADDLE_AVAILABLE = True
@@ -13,15 +15,16 @@ except ImportError:
     _PADDLE_AVAILABLE = False
 
 _ocr = None
+logger = get_logger(__name__)
 
 
 def load_ocr() -> None:
     global _ocr
     if not _PADDLE_AVAILABLE:
-        print("PaddleOCR not installed — OCR disabled. Text component of hybrid search will be skipped.")
+        logger.warning("PaddleOCR not installed — OCR disabled. Text component of hybrid search will be skipped.")
         return
     device = "gpu:0" if torch.cuda.is_available() else "cpu"
-    print(f"Loading PaddleOCR on {device}...")
+    logger.info("Loading PaddleOCR on %s...", device)
     _ocr = PaddleOCR(
         text_detection_model_name="PP-OCRv6_medium_det",
         text_recognition_model_name="PP-OCRv6_medium_rec",
@@ -31,7 +34,7 @@ def load_ocr() -> None:
         use_doc_unwarping=False,
         use_textline_orientation=False,
     )
-    print("PaddleOCR loaded")
+    logger.info("PaddleOCR loaded")
 
 
 def extract_text(image: Image.Image) -> str:

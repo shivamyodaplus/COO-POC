@@ -5,15 +5,18 @@ import torch
 from PIL import Image
 from sentence_transformers import SentenceTransformer
 
+from app.core.logger import get_logger
+
 _model: SentenceTransformer | None = None
+logger = get_logger(__name__)
 
 
 def load_model() -> None:
     global _model
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Loading Qwen3-VL-Embedding-2B on {device}...")
+    logger.info("Loading Qwen3-VL-Embedding-2B on %s...", device)
     _model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device=device)
-    print("Qwen3-VL-Embedding-2B loaded — dim=2048")
+    logger.info("Qwen3-VL-Embedding-2B loaded — dim=2048")
 
 
 def embed_image(image: Image.Image) -> np.ndarray:

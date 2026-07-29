@@ -5,10 +5,12 @@ from typing import Any
 from pymilvus import AnnSearchRequest, DataType, Function, FunctionType, MilvusClient, WeightedRanker
 
 from app.core.config import settings
+from app.core.logger import get_logger
 
 _client: MilvusClient | None = None
 COLLECTION = settings.MILVUS_COLLECTION
 DENSE_DIM = 2048
+logger = get_logger(__name__)
 
 
 def get_client() -> MilvusClient:
@@ -20,14 +22,14 @@ def get_client() -> MilvusClient:
 def connect() -> None:
     global _client
     _client = MilvusClient(uri=settings.MILVUS_URI)
-    print(f"Connected to Milvus at {settings.MILVUS_URI}")
+    logger.info("Connected to Milvus at %s", settings.MILVUS_URI)
 
 
 def ensure_collection() -> None:
     client = get_client()
 
     if client.has_collection(COLLECTION):
-        print(f"Collection '{COLLECTION}' already exists — skipping creation")
+        logger.info("Collection '%s' already exists — skipping creation", COLLECTION)
         return
 
     # Build schema
@@ -63,7 +65,7 @@ def ensure_collection() -> None:
         schema=schema,
         index_params=idx,
     )
-    print(f"Created Milvus collection '{COLLECTION}'")
+    logger.info("Created Milvus collection '%s'", COLLECTION)
 
 
 def insert(records: list[dict[str, Any]]) -> None:
