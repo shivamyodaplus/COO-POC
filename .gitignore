@@ -6,4 +6,4 @@ venv
 */chroma_layout_db
 */*.png
 *.png
-*.sqlite3
+*.sqlite3y

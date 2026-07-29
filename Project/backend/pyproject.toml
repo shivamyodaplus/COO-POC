@@ -9,6 +9,15 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "streamlit>=1.35.0",
     "requests>=2.31.0",
+    "pymilvus[model]>=2.5.0",
+    "sentence-transformers>=3.0",
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "opencv-python-headless>=4.8",
+    "pypdfium2>=4.0",
+    # paddlepaddle and paddleocr have no aarch64 pypi wheel;
+    # install manually: pip install paddlepaddle paddleocr
+    "nltk>=3.10.0",
 ]
 
 [tool.uv]

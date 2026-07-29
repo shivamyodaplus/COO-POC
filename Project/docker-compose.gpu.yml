@@ -1,0 +1,21 @@
+# GPU override — merged on top of docker-compose.yml by start.sh when nvidia-smi is detected.
+services:
+  app:
+    build:
+      args:
+        CUDA_TORCH: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: ["gpu"]
+
+  milvus:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: ["gpu"]
+              device_ids: ["0"]
