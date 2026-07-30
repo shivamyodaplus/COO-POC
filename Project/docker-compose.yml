@@ -11,6 +11,8 @@ services:
       - VERSION=0.1.0
       - ENVIRONMENT=production
       - MILVUS_URI=http://milvus:19530
+      - POSTGRES_DSN=postgresql://appuser:apppassword@postgres:5432/appdb
+      - STORAGE_ADAPTER=postgres
       - HF_HOME=/root/.cache/huggingface
       - LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu
       - LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu
@@ -20,6 +22,24 @@ services:
     depends_on:
       milvus:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: appdb
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: apppassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   etcd:
     container_name: milvus-etcd
@@ -94,3 +114,4 @@ volumes:
   minio_data:
   milvus_data:
   app_images:
+  postgres_data:
