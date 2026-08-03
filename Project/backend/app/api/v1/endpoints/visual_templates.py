@@ -22,10 +22,11 @@ UPLOAD_NAME = Form(...)
 UPLOAD_TEMPLATE_TYPE = Form(...)
 UPLOAD_COUNTRY = Form(None)
 UPLOAD_DOC_TYPE = Form(None)
-MATCH_TEMPLATE_IDS = Form(None)
-MATCH_COUNTRY = Form(None)
-MATCH_DOC_TYPE = Form(None)
-MATCH_THRESHOLD = Form(0.2)
+MATCH_TEMPLATE_IDS  = Form(None)
+MATCH_COUNTRY       = Form(None)
+MATCH_DOC_TYPE      = Form(None)
+MATCH_THRESHOLD     = Form(0.2)
+MATCH_P2_THRESHOLD  = Form(10)
 
 
 def _decode_image_bytes(raw: bytes) -> np.ndarray | None:
@@ -150,6 +151,7 @@ async def match_visual_templates(
     country: str | None = MATCH_COUNTRY,
     doc_type: str | None = MATCH_DOC_TYPE,
     threshold: float = MATCH_THRESHOLD,
+    p2_threshold: int = MATCH_P2_THRESHOLD,
 ):
     if threshold < 0 or threshold > 1:
         raise HTTPException(status_code=422, detail="threshold must be between 0 and 1")
@@ -222,6 +224,10 @@ async def match_visual_templates(
         query_image,
         template_images,
         threshold,
+        None,  # scales — use default
+        30,    # canny_low
+        100,   # canny_high
+        p2_threshold,
     )
 
     try:
@@ -243,6 +249,11 @@ async def match_visual_templates(
                 "score": match.score,
                 "scale": match.scale,
                 "bounding_box": list(match.bounding_box),
+                "p2_verdict": match.p2_verdict,
+                "p2_n_matches": match.p2_n_matches,
+                "p2_n_inliers": match.p2_n_inliers,
+                "p2_homography_vis_jpeg_b64": match.p2_homography_vis_jpeg_b64,
+                "p2_refined_jpeg_b64": match.p2_refined_jpeg_b64,
             }
         )
 

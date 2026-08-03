@@ -11,6 +11,7 @@ from app.core.logger import get_logger, setup_logging
 from app.models.embedding import load_model
 from app.models.ocr import load_ocr
 from app.services.milvus_service import connect, ensure_collection
+from app.utils.template_matching import load_lightglue_models
 from app.services.outbox_worker import run_outbox_worker
 from app.services.postgres_service import close as postgres_close
 from app.services.postgres_service import connect as postgres_connect
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
     logger.info("Startup: loading models and connecting databases")
     load_model()
     load_ocr()
+    load_lightglue_models()
     connect()
     ensure_collection()
     postgres_connect()

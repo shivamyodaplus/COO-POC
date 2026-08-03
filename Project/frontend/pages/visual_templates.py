@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 
 import requests
@@ -24,6 +25,14 @@ def render_match_results(payload: dict) -> None:
     else:
         st.warning(f"No visual templates matched ({total} checked)")
 
+    _VERDICT_STYLE: dict[str, tuple[str, str]] = {
+        "TRUE_POSITIVE":    ("✅ TRUE POSITIVE",    "success"),
+        "FALSE_POSITIVE":   ("⚠️ FALSE POSITIVE",   "warning"),
+        "NO_MATCH":         ("❌ NO MATCH",          "error"),
+        "HOMOGRAPHY_FAILED":("❌ HOMOGRAPHY FAILED", "error"),
+        "NOT_RUN":          ("⏭️ PHASE 2 NOT RUN",   "info"),
+    }
+
     for item in payload.get("results", []):
         with st.container(border=True):
             c1, c2 = st.columns([1, 3])
@@ -35,16 +44,43 @@ def render_match_results(payload: dict) -> None:
             with c2:
                 icon = TEMPLATE_ICONS.get(item.get("template_type", ""), "❓")
                 st.markdown(f"**{item['name']}** {icon} ({item['template_type']})")
-                m1, m2 = st.columns(2)
+
+                # ── Verdict badge ─────────────────────────────────────────────
+                verdict = item.get("p2_verdict", "NOT_RUN")
+                label, style = _VERDICT_STYLE.get(verdict, (verdict, "info"))
+                getattr(st, style)(label)
+
+                # ── Metrics row ───────────────────────────────────────────────
+                m1, m2, m3, m4 = st.columns(4)
                 with m1:
-                    st.metric("Score", f"{item['score']:.4f}")
+                    st.metric("P1 Score", f"{item['score']:.4f}")
                 with m2:
+                    st.metric("LG Matches", item.get("p2_n_matches", 0))
+                with m3:
+                    st.metric("Inliers", item.get("p2_n_inliers", 0))
+                with m4:
                     st.markdown("**Status:** " + ("Found" if item["found"] else "Not Found"))
+
                 if item["found"]:
                     bbox = item["bounding_box"]
                     st.caption(
                         f"Bounding box (x0,y0,x1,y1): {bbox[0]}, {bbox[1]}, {bbox[2]}, {bbox[3]}"
                     )
+
+            # ── Phase 2 visualisations ─────────────────────────────────────────
+            hom_b64 = item.get("p2_homography_vis_jpeg_b64")
+            ref_b64 = item.get("p2_refined_jpeg_b64")
+            if hom_b64 or ref_b64:
+                with st.expander("Phase 2 Verification", expanded=item["found"]):
+                    v1, v2 = st.columns(2)
+                    if hom_b64:
+                        with v1:
+                            st.caption("Homography quad · inlier kps · bbox")
+                            st.image(base64.b64decode(hom_b64), use_container_width=True)
+                    if ref_b64:
+                        with v2:
+                            st.caption("Homography-refined region")
+                            st.image(base64.b64decode(ref_b64), use_container_width=True)
 
 
 st.header("Visual Templates")
@@ -153,7 +189,13 @@ with tab_match:
         )
         match_country = st.text_input("Country filter (optional)", key="vt_match_country")
         match_doc_type = st.text_input("Document Type filter (optional)", key="vt_match_doc_type")
-        threshold = st.slider("Threshold", min_value=0.0, max_value=1.0, value=0.2, step=0.01)
+        threshold = st.slider("Phase 1 Threshold", min_value=0.0, max_value=1.0, value=0.2, step=0.01)
+        p2_threshold = st.slider(
+            "Min Phase 2 Inliers (LightGlue)",
+            min_value=1, max_value=50, value=10, step=1,
+            key="vt_p2_threshold",
+            help="Minimum MAGSAC++ inliers needed to confirm a TRUE POSITIVE",
+        )
         run_match = st.form_submit_button("Run Match", type="primary", use_container_width=True)
 
     if run_match:
@@ -164,6 +206,7 @@ with tab_match:
                 "country": match_country.strip(),
                 "doc_type": match_doc_type.strip(),
                 "threshold": str(threshold),
+                "p2_threshold": str(p2_threshold),
             }
             resp = requests.post(
                 f"{BACKEND_URL}/api/v1/visual-templates/match",
