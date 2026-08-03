@@ -78,7 +78,7 @@ def match_templates(
     for idx, template in enumerate(templates):
         tmpl_gray  = _to_gray(template)
         tH, tW     = tmpl_gray.shape[:2]
-        tmpl_edges = cv2.Canny(tmpl_gray, canny_low, canny_high)
+        tmpl_edges = cv2.Canny(cv2.GaussianBlur(tmpl_gray, (5, 5), 0), canny_low, canny_high)
 
         best: tuple | None = None  # (score, loc, ratio, scale)
 
@@ -91,7 +91,7 @@ def match_templates(
             if resized.shape[0] < tH or resized.shape[1] < tW:
                 break
 
-            img_edges        = cv2.Canny(resized, canny_low, canny_high)
+            img_edges = cv2.Canny(cv2.GaussianBlur(resized, (5, 5), 0), canny_low, canny_high)
             result           = cv2.matchTemplate(img_edges, tmpl_edges, cv2.TM_CCOEFF_NORMED)
             _, maxVal, _, maxLoc = cv2.minMaxLoc(result)
 
