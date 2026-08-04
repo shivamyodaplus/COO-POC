@@ -137,6 +137,12 @@ def ensure_schema() -> None:
             cur.execute(
                 "ALTER TABLE visual_templates ADD COLUMN IF NOT EXISTS extracted_attributes JSONB"
             )
+            cur.execute(
+                "ALTER TABLE visual_templates ADD COLUMN IF NOT EXISTS page_num INT NOT NULL DEFAULT 0"
+            )
+            cur.execute(
+                "ALTER TABLE visual_templates ADD COLUMN IF NOT EXISTS attributes_status TEXT NOT NULL DEFAULT 'pending'"
+            )
 
             # ── Transaction management ───────────────────────────────────
             cur.execute(

@@ -9,10 +9,10 @@ it as a field schema without re-running the LLM every time.
 
 from __future__ import annotations
 
-import json
 import logging
 
 from langchain_core.messages import HumanMessage
+from pydantic import BaseModel
 
 from app.langgraph.llm import encode_image_for_llm, get_vision_llm
 from app.langgraph.schemas.coo_pacd_schemas import (
@@ -28,19 +28,18 @@ You are a document template analyst.
 Examine the provided template image and identify ALL labeled fields, boxes, or sections
 that are meant to be filled in or printed on the final document.
 
-Respond ONLY with a JSON object where:
-- keys are field names in snake_case (e.g. "exporter_name", "invoice_number")
-- values are the label exactly as seen on the template (e.g. "Exporter Name", "Invoice No.")
+For each field provide:
+- key: field name in snake_case (e.g. "exporter_name", "invoice_number")
+- value: the label exactly as seen on the template (e.g. "Exporter Name", "Invoice No.")
 
-Example:
-{
-  "exporter_name": "Exporter Name",
-  "country_of_origin": "Country of Origin",
-  "invoice_number": "Invoice / Reference No."
-}
-
-Return an empty object {} if no labeled fields are found.
+Return an empty dict if no labeled fields are found.
 """
+
+
+class _AttributeMap(BaseModel):
+    """Structured output schema for template attribute extraction."""
+
+    attributes: dict[str, str]
 
 
 def template_attribute_node(state: GraphState) -> GraphState:
@@ -81,7 +80,10 @@ def template_attribute_node(state: GraphState) -> GraphState:
         errors.append(f"template_attribute_node validation error: {exc}")
         return {**state, "errors": errors, "current_step": "template_attribute_node"}  # type: ignore[return-value]
 
+    # with_structured_output uses tool-calling to guarantee valid JSON that
+    # matches _AttributeMap — no markdown fences, no truncation surprises.
     llm = get_vision_llm(temperature=0.0)
+    structured_llm = llm.with_structured_output(_AttributeMap)
     message = HumanMessage(
         content=[
             {"type": "text", "text": _SYSTEM_PROMPT},
@@ -92,24 +94,17 @@ def template_attribute_node(state: GraphState) -> GraphState:
         ]
     )
 
-    raw_response = ""
     attributes: dict[str, str] = {}
     try:
-        response = llm.invoke([message])
-        raw_response = str(response.content)
-        parsed = json.loads(raw_response)
-        if not isinstance(parsed, dict):
-            raise ValueError("Expected a JSON object")
-        attributes = {str(k): str(v) for k, v in parsed.items()}
-    except (json.JSONDecodeError, ValueError) as exc:
-        errors.append(f"template_attribute_node: bad LLM JSON — {exc}")
+        result: _AttributeMap = structured_llm.invoke([message])  # type: ignore[assignment]
+        attributes = {str(k): str(v) for k, v in result.attributes.items()}
     except Exception as exc:
         errors.append(f"template_attribute_node: LLM call failed — {exc}")
 
     output = TemplateAttributeOutput(
         template_id=template_id,
         attributes=attributes,
-        raw_llm_response=raw_response,
+        raw_llm_response="",
         errors=errors,
     )
 

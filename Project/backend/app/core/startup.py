@@ -8,7 +8,7 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.core.logger import get_logger, setup_logging
-from app.models.embedding import load_model
+from app.models.embedding import load_model, load_bge_model
 from app.models.ocr import load_ocr
 from app.services.milvus_service import connect, ensure_collection
 from app.services.pacd_milvus_service import connect as pacd_connect, ensure_pacd_collection
@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     setup_logging(settings.LOG_LEVEL)
     logger.info("Startup: loading models and connecting databases")
     load_model()
+    load_bge_model()
     load_ocr()
     load_lightglue_models()
     connect()

@@ -25,7 +25,20 @@ class Settings(BaseSettings):
     VLLM_VISION_MODEL: str = "qwen3-vl-4b"
     VLLM_API_KEY: str = "vllm-local"
     VLLM_TEMPERATURE: float = 0.0
-    VLLM_MAX_TOKENS: int = 2048
+    # None = omit max_tokens from the request so the model uses its full context window.
+    VLLM_MAX_TOKENS: int | None = None
+
+    # BGE-M3 text embedding (PACD / COO cross-reference)
+    BGE_M3_MODEL: str = "BAAI/bge-m3"
+    BGE_M3_USE_FP16: bool = True
+    # Force a specific device for BGE-M3.  Leave empty for auto-detection via
+    # torch.cuda.is_available().  Set to 'cuda' on ARM64/Jetson where PyTorch
+    # is a CPU build yet the NVIDIA Container Toolkit exposes the GPU.
+    BGE_M3_DEVICE: str = ""
+
+    # PACD chunking strategy
+    CHUNK_WINDOW: int = 5   # KV pairs per grouped chunk
+    CHUNK_STRIDE: int = 3   # stride between grouped chunks
 
 
 settings = Settings()

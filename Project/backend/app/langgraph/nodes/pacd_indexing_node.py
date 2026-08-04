@@ -1,35 +1,78 @@
 """
-PACDIndexingNode — stores PACD document pages into:
-  1. The ``pacd_coo_documents`` Milvus collection (for cross-reference search).
-  2. Postgres ``documents`` table (for image storage + outbox sync).
+PACDIndexingNode — stores PACD document pages into the ``pacd_coo_documents``
+Milvus collection using BGE-M3 text embeddings and a KV-pair chunking strategy.
 
-One Milvus record is created per page.  The ``extracted_kv`` field holds a
-JSON-serialised list of {key, value} pairs from the Vision extraction step.
-Dense embeddings are computed from the page images via the existing
-``embed_image`` model.
+Chunking strategy (per page)
+-----------------------------
+1. **Individual KV chunks** — each extracted KV pair becomes its own chunk:
+   ``"{key}: {value}"``
+2. **Grouped KV chunks** — sliding window of CHUNK_WINDOW pairs, stride CHUNK_STRIDE,
+   providing contextual overlap.  Duplicated single-pair groups are skipped.
+
+Each chunk is embedded with BGE-M3 (dense 1024-dim + sparse lexical weights)
+and stored as one record.  Record IDs use the format::
+
+    {doc_id}_p{page_num}_c{chunk_idx}
 """
 
 from __future__ import annotations
 
-import json
 import logging
+from typing import Any
 
+from app.core.config import settings
 from app.langgraph.schemas.coo_pacd_schemas import PACDIndexingInput, PACDIndexingOutput
 from app.langgraph.state import GraphState
-from app.models.embedding import embed_image
-from app.models.ocr import extract_text
+from app.models.embedding import embed_text_chunks
 from app.services import pacd_milvus_service, postgres_service
 from app.utils.image_processing import preprocess_image
 
 logger = logging.getLogger(__name__)
 
 
-def _page_record_id(document_id: str, page_num: int) -> str:
-    return f"{document_id}_p{page_num}"
+def _chunk_record_id(document_id: str, page_num: int, chunk_idx: int) -> str:
+    return f"{document_id}_p{page_num}_c{chunk_idx}"
+
+
+def _build_chunks(kv_pairs: list[dict[str, str]], window: int, stride: int) -> list[str]:
+    """Build individual + grouped text chunks from a list of KV dicts.
+
+    Returns a list of text strings (one per chunk), deduplicating chunks that
+    would be identical to an individual-pair chunk.
+    """
+    chunks: list[str] = []
+
+    # 1. Individual KV chunks
+    for kv in kv_pairs:
+        key = str(kv.get("key", "")).strip()
+        val = str(kv.get("value", "")).strip()
+        if key:
+            chunks.append(f"{key}: {val}")
+
+    n = len(kv_pairs)
+    if n <= 1:
+        return chunks
+
+    # 2. Grouped KV chunks (sliding window)
+    for start in range(0, n, stride):
+        end = min(start + window, n)
+        group = kv_pairs[start:end]
+        if len(group) <= 1:
+            # Would duplicate an individual chunk — skip
+            continue
+        group_text = "\n".join(
+            f"{kv.get('key', '').strip()}: {kv.get('value', '').strip()}"
+            for kv in group
+        )
+        chunks.append(group_text)
+        if end == n:
+            break
+
+    return chunks
 
 
 def pacd_indexing_node(state: GraphState) -> GraphState:
-    """LangGraph node: index PACD document pages into Milvus + Postgres.
+    """LangGraph node: chunk and index PACD document pages into Milvus.
 
     Reads
     -----
@@ -66,71 +109,99 @@ def pacd_indexing_node(state: GraphState) -> GraphState:
         return {**state, "errors": errors, "current_step": "pacd_indexing_node"}  # type: ignore[return-value]
 
     # --- Group kv pairs by page ------------------------------------------------
-    kv_by_page: dict[int, list[dict]] = {}
+    kv_by_page: dict[int, list[dict[str, str]]] = {}
     for kv in extracted_kv_pairs:
-        page = kv.get("page", 1)
+        page = int(kv.get("page", 1))
         kv_by_page.setdefault(page, []).append({"key": kv["key"], "value": kv["value"]})
 
-    # --- Build Milvus + Postgres records per page -----------------------------
-    milvus_records: list[dict] = []
-    postgres_records: list[dict] = []
+    # --- Build chunks and embed per page ----------------------------------------
+    all_milvus_records: list[dict[str, Any]] = []
+    postgres_records: list[dict[str, Any]] = []
+    window = settings.CHUNK_WINDOW
+    stride = settings.CHUNK_STRIDE
 
     for page_num, image_bytes in enumerate(page_images, start=1):
+        page_kv = kv_by_page.get(page_num, [])
+        if not page_kv:
+            logger.debug("pacd_indexing_node: no KV pairs for page %d — skipping", page_num)
+            continue
+
+        chunks = _build_chunks(page_kv, window, stride)
+        if not chunks:
+            continue
+
+        # Embed all chunks for this page in one batch call
+        try:
+            dense_vecs, sparse_vecs = embed_text_chunks(chunks)
+        except Exception as exc:
+            errors.append(f"pacd_indexing_node p{page_num}: BGE-M3 embedding failed — {exc}")
+            continue
+
+        for chunk_idx, (chunk_text, dense, sparse) in enumerate(
+            zip(chunks, dense_vecs, sparse_vecs)
+        ):
+            record_id = _chunk_record_id(document_id, page_num, chunk_idx)
+            all_milvus_records.append({
+                "id":             record_id,
+                "user_id":        user_id,
+                "transaction_id": transaction_id,
+                "doc_category":   "pacd",
+                "filename":       filename,
+                "page_num":       page_num,
+                "chunk_index":    chunk_idx,
+                "chunk_text":     chunk_text[:4096],
+                "dense":          dense,
+                "sparse":         sparse,
+            })
+
+        # Store first-page image in Postgres for audit / retrieval
         try:
             from PIL import Image
             import io
             pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
             preprocessed = preprocess_image(pil_image)
-            dense_vec = embed_image(preprocessed).tolist()
-            ocr_text = extract_text(preprocessed)
-        except Exception as exc:
-            errors.append(f"pacd_indexing_node p{page_num}: embedding failed — {exc}")
-            continue
-
-        page_kv = kv_by_page.get(page_num, [])
-        record_id = _page_record_id(document_id, page_num)
-
-        milvus_records.append({
-            "id":             record_id,
-            "user_id":        user_id,
-            "transaction_id": transaction_id,
-            "doc_category":   "pacd",
-            "filename":       filename,
-            "page_num":       page_num,
-            "ocr_text":       ocr_text or "",
-            "extracted_kv":   json.dumps(page_kv),
-            "dense":          dense_vec,
-        })
+            import io as _io
+            buf = _io.BytesIO()
+            preprocessed.save(buf, format="JPEG", quality=85)
+            jpeg_bytes = buf.getvalue()
+        except Exception:
+            jpeg_bytes = image_bytes
 
         postgres_records.append({
-            "id":                  record_id,
-            "country":             "",
-            "doc_type":            "pacd",
-            "file_name":           filename,
-            "ocr_text":            ocr_text or "",
-            "image_data":          image_bytes,
-            "image_content_type":  "image/jpeg",
-            "dense":               dense_vec,
+            "id":                 f"{document_id}_p{page_num}",
+            "country":            "",
+            "doc_type":           "pacd",
+            "file_name":          filename,
+            "ocr_text":           " ".join(
+                f"{kv['key']}: {kv['value']}" for kv in page_kv
+            )[:65535],
+            "image_data":         jpeg_bytes,
+            "image_content_type": "image/jpeg",
+            "dense":              dense_vecs[0] if dense_vecs else [],
         })
 
     # --- Persist ---------------------------------------------------------------
-    if milvus_records:
+    if all_milvus_records:
         try:
-            pacd_milvus_service.insert_pacd_pages(milvus_records)
-            logger.info("pacd_indexing_node: inserted %d pages into Milvus", len(milvus_records))
+            pacd_milvus_service.insert_pacd_chunks(all_milvus_records)
+            logger.info(
+                "pacd_indexing_node: inserted %d chunks into Milvus", len(all_milvus_records)
+            )
         except Exception as exc:
             errors.append(f"pacd_indexing_node: Milvus insert failed — {exc}")
 
     if postgres_records:
         try:
             postgres_service.insert_documents_with_outbox(postgres_records)
-            logger.info("pacd_indexing_node: inserted %d pages into Postgres", len(postgres_records))
+            logger.info(
+                "pacd_indexing_node: inserted %d pages into Postgres", len(postgres_records)
+            )
         except Exception as exc:
             errors.append(f"pacd_indexing_node: Postgres insert failed — {exc}")
 
     output = PACDIndexingOutput(
         document_id=document_id,
-        pages_indexed=len(milvus_records),
+        pages_indexed=len({r["page_num"] for r in all_milvus_records}),
         errors=errors,
     )
 

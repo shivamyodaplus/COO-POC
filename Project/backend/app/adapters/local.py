@@ -39,6 +39,7 @@ class LocalStorageAdapter(StorageAdapter):
         doc_type: str | None,
         image_bytes: bytes,
         content_type: str,
+        page_num: int = 0,
     ) -> VisualTemplateRecord:
         template_id = str(uuid.uuid4())
         image_path = TEMPLATE_DIR / f"{template_id}.bin"
@@ -51,6 +52,8 @@ class LocalStorageAdapter(StorageAdapter):
             "country": country,
             "doc_type": doc_type,
             "content_type": content_type,
+            "page_num": page_num,
+            "attributes_status": "pending",
             "created_at": datetime.now(UTC).isoformat(),
         }
 
@@ -65,6 +68,8 @@ class LocalStorageAdapter(StorageAdapter):
             country=country,
             doc_type=doc_type,
             created_at=record["created_at"],
+            page_num=page_num,
+            attributes_status="pending",
         )
 
     def list_visual_templates(
@@ -140,6 +145,14 @@ class LocalStorageAdapter(StorageAdapter):
         image_path = TEMPLATE_DIR / f"{template_id}.bin"
         image_path.unlink(missing_ok=True)
         return True
+
+    def update_template_status(self, template_id: str, status: str) -> None:
+        entries = self._read_entries()
+        for entry in entries:
+            if entry["id"] == template_id:
+                entry["attributes_status"] = status  # type: ignore[assignment]
+                break
+        TEMPLATE_INDEX.write_text(json.dumps(entries), encoding="utf-8")
 
     def _read_entries(self) -> list[dict[str, str | None]]:
         if not TEMPLATE_INDEX.exists():

@@ -64,6 +64,7 @@ class GraphState(TypedDict):
     # ------------------------------------------------------------------ #
     coo_extracted_fields: dict[str, Any]       # fields extracted from COO document
     cross_reference_results: list[dict[str, Any]]  # list of DiscrepancyItem dicts
+    cross_reference_chunks: list[dict[str, Any]]   # deduplicated PACD chunks used in validation
     verification_report: dict[str, Any]        # final report {table, narrative, summary}
 
     # ------------------------------------------------------------------ #

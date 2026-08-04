@@ -2,15 +2,186 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import requests
 import streamlit as st
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from utils.api_client import upload_pacd
+from utils.api_client import get_template_status, list_visual_templates
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+
+st.header("Step 1: Upload Template")
+st.caption(
+    "Upload a blank structured COO template document. "
+    "Optionally upload stamps and signatures as separate visual attributes."
+)
+
+tab_template, tab_visual = st.tabs(["Blank Template Document", "Stamps & Signatures"])
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tab A — Blank Document Template
+# ──────────────────────────────────────────────────────────────────────────────
+with tab_template:
+    st.subheader("Upload Blank Template Document")
+    st.caption(
+        "Upload the blank (unfilled) version of the COO form. "
+        "Supports PDF (all pages indexed) and images (PNG, JPG, TIFF, etc.)."
+    )
+
+    with st.form("template_upload_form"):
+        template_file = st.file_uploader(
+            "Template File",
+            type=["pdf", "png", "jpg", "jpeg", "tiff", "bmp", "gif", "webp"],
+        )
+        tc1, tc2 = st.columns(2)
+        with tc1:
+            t_country = st.text_input("Country", placeholder="e.g. Egypt", key="t_country")
+        with tc2:
+            t_doc_type = st.text_input("Document Type", placeholder="e.g. CoO", key="t_doc_type")
+
+        submitted_template = st.form_submit_button(
+            "Upload & Index Template", type="primary", use_container_width=True
+        )
+
+    if submitted_template:
+        if not template_file:
+            st.error("Please select a template file.")
+        elif not t_country.strip():
+            st.error("Country is required.")
+        elif not t_doc_type.strip():
+            st.error("Document Type is required.")
+        else:
+            with st.spinner("Uploading and indexing template pages…"):
+                resp = requests.post(
+                    f"{BACKEND_URL}/api/v1/visual-templates/upload",
+                    data={
+                        "name": Path(template_file.name).stem,
+                        "template_type": "document_template",
+                        "country": t_country.strip(),
+                        "doc_type": t_doc_type.strip(),
+                    },
+                    files={
+                        "file": (
+                            template_file.name,
+                            template_file.getvalue(),
+                            template_file.type or "application/octet-stream",
+                        )
+                    },
+                    timeout=300,
+                )
+
+            if not resp.ok:
+                st.error(f"Upload failed ({resp.status_code}): {resp.text}")
+            else:
+                records = resp.json()
+                if isinstance(records, dict):
+                    records = [records]  # single page response
+
+                st.success(f"Template indexed — {len(records)} page(s) stored.")
+                st.session_state["last_template_records"] = records
+
+                # ── Poll attribute extraction status per page ────────────────
+                pending_ids = [r["id"] for r in records]
+                status_placeholder = st.empty()
+
+                poll_limit = 60  # max 60 × 3 s = 3 min
+                for _ in range(poll_limit):
+                    if not pending_ids:
+                        break
+                    time.sleep(3)
+                    still_pending = []
+                    for tid in pending_ids:
+                        try:
+                            status_data = get_template_status(tid)
+                            if status_data.get("attributes_status") == "pending":
+                                still_pending.append(tid)
+                        except Exception:
+                            still_pending.append(tid)
+                    pending_ids = still_pending
+                    status_placeholder.info(
+                        f"Extracting field schema… {len(pending_ids)} page(s) still processing."
+                        if pending_ids
+                        else "Field schema extraction complete."
+                    )
+                    if not pending_ids:
+                        break
+
+                if pending_ids:
+                    status_placeholder.warning(
+                        "Field schema extraction is still running in the background. "
+                        "You can proceed — it will finish shortly."
+                    )
+                else:
+                    status_placeholder.success("All pages ready. Template is fully indexed.")
+
+                # ── Show indexed pages ───────────────────────────────────────
+                st.markdown("**Indexed Pages:**")
+                for rec in records:
+                    st.markdown(
+                        f"- `{rec['id']}` — page {rec.get('page_num', 0)} "
+                        f"| status: `{rec.get('attributes_status', 'pending')}`"
+                    )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tab B — Stamps & Signatures (visual attributes, unchanged flow)
+# ──────────────────────────────────────────────────────────────────────────────
+with tab_visual:
+    st.subheader("Upload Stamps & Signatures")
+    st.caption("Upload stamp, signature, or logo images as reusable visual attributes.")
+
+    with st.form("visual_upload_form"):
+        visual_files = st.file_uploader(
+            "Visual Template Images (multi-select)",
+            type=["png", "jpg", "jpeg", "tiff", "bmp", "gif", "webp"],
+            accept_multiple_files=True,
+        )
+        vc1, vc2 = st.columns(2)
+        with vc1:
+            v_template_type = st.selectbox(
+                "Template Type", ["signature", "sign", "stamp", "logo"]
+            )
+        with vc2:
+            v_country = st.text_input("Country (optional)", placeholder="e.g. Egypt", key="v_country")
+        v_doc_type = st.text_input(
+            "Document Type (optional)", placeholder="e.g. CoO", key="v_doc_type"
+        )
+        submitted_visual = st.form_submit_button(
+            "Upload Visual Templates", type="secondary", use_container_width=True
+        )
+
+    if submitted_visual:
+        if not visual_files:
+            st.error("Please select at least one image.")
+        else:
+            success_count = 0
+            fail_count = 0
+            with st.spinner("Uploading visual templates…"):
+                for vf in visual_files:
+                    vresp = requests.post(
+                        f"{BACKEND_URL}/api/v1/visual-templates/upload",
+                        data={
+                            "name": Path(vf.name).stem,
+                            "template_type": v_template_type,
+                            "country": v_country.strip() if v_country.strip() else "",
+                            "doc_type": v_doc_type.strip() if v_doc_type.strip() else "",
+                        },
+                        files={"file": (vf.name, vf.getvalue(), vf.type or "image/png")},
+                        timeout=120,
+                    )
+                    if vresp.ok:
+                        success_count += 1
+                    else:
+                        fail_count += 1
+                        st.warning(f"'{vf.name}' failed ({vresp.status_code}): {vresp.text}")
+
+            if success_count:
+                st.success(f"Uploaded {success_count} visual template(s).")
+            if fail_count:
+                st.error(f"{fail_count} upload(s) failed.")
+
 
 st.header("Step 1: Upload Document")
 st.caption(

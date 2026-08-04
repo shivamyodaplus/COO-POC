@@ -52,7 +52,7 @@ def template_retrieval_node(state: GraphState) -> GraphState:
             document_id=state.get("document_id") or "",
             country=state.get("country"),
             doc_type=state.get("doc_type"),
-            top_k=3,
+            top_k=2,
         )
     except Exception as exc:
         errors.append(f"template_retrieval_node validation error: {exc}")

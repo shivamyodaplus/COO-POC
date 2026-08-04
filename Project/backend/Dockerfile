@@ -23,13 +23,25 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Declared here (after uv sync) so switching GPU/CPU does not bust the uv sync cache layer.
 ARG CUDA_TORCH=0
 
-# Reinstall torch/torchvision with CUDA 12.8 wheels when CUDA_TORCH=1
+# Reinstall torch/torchvision with CUDA wheels when CUDA_TORCH=1.
+# pytorch.org/whl/cu128 only carries x86_64 wheels; on aarch64 (Jetson/ARM)
+# we try NVIDIA's Jetson index first, then fall back gracefully so the image
+# always builds regardless of architecture.
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ "$CUDA_TORCH" = "1" ]; then \
-        /bin/uv pip install torch torchvision \
-            --index-url https://download.pytorch.org/whl/cu128 \
-            --upgrade; \
-        echo "[torch] CUDA 12.8 build installed"; \
+        ARCH=$(uname -m); \
+        if [ "$ARCH" = "x86_64" ]; then \
+            /bin/uv pip install torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu128 \
+                --upgrade \
+            && echo "[torch] CUDA 12.8 x86_64 installed"; \
+        else \
+            /bin/uv pip install torch torchvision \
+                --index-url https://pypi.jetson.com/jp61/aarch64 \
+                --upgrade \
+            && echo "[torch] CUDA aarch64/Jetson installed" \
+            || echo "[torch] Jetson index unavailable — keeping CPU build"; \
+        fi; \
     else \
         echo "[torch] CPU build (default)"; \
     fi

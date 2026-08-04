@@ -33,9 +33,12 @@ services:
       - LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu
       - QWEN_TEXT_BASE_URL=http://host.docker.internal:${QWEN_TEXT_PORT:-8001}/v1
       - QWEN_VL_BASE_URL=http://host.docker.internal:${QWEN_VL_PORT:-8002}/v1
-      # Hide GPU from container — vLLM runs on host; embedding model uses CPU to avoid
-      # NVRTC JIT compilation failure on sm_12.1 (GB10 Blackwell not yet in cu128 NVRTC).
-      - CUDA_VISIBLE_DEVICES=
+      # BGE-M3 device override — 'cuda' forces GPU even on ARM64 where
+      # torch.cuda.is_available() returns False.  Leave empty for auto-detect.
+      - BGE_M3_DEVICE=${BGE_M3_DEVICE:-cuda}
+      # Expose GPU so BGE-M3 can use it.  PYTORCH_JIT=0 prevents NVRTC JIT
+      # failures on sm_12.1 (GB10 Blackwell not yet in cu128 NVRTC).
+      - PYTORCH_JIT=0
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
       - app_images:/app/images

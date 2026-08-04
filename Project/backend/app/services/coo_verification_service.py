@@ -161,6 +161,16 @@ async def run_template_attribute_extraction(
             logger.info("Persisted %d attributes for template %s", len(attributes), template_id)
         except Exception as exc:
             logger.warning("Could not persist template attributes: %s", exc)
+            await asyncio.to_thread(adapter.update_template_status, template_id, "failed")
+            return attributes
+
+    try:
+        adapter = get_adapter()
+        await asyncio.to_thread(
+            adapter.update_template_status, template_id, "ready" if attributes else "failed"
+        )
+    except Exception as exc:
+        logger.warning("Could not update template status: %s", exc)
 
     return attributes
 

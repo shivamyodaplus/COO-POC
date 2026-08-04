@@ -112,6 +112,13 @@ cleanup() {
 
 trap 'cleanup; exit 130' INT TERM
 
+# Detect detach mode — if -d/--detach is passed, docker compose up returns
+# immediately and we must NOT call cleanup or it tears the stack back down.
+DETACH_MODE=0
+for _arg in "$@"; do
+    [[ "$_arg" == "-d" || "$_arg" == "--detach" ]] && DETACH_MODE=1
+done
+
 # ── Phase 4: Launch Docker Compose (GPU-aware) ────────────────────────────────
 if command -v nvidia-smi &>/dev/null \
         && nvidia-smi --query-gpu=name --format=csv,noheader &>/dev/null 2>&1; then
@@ -130,4 +137,4 @@ else
 fi
 
 # Normal exit (docker compose up finished on its own)
-cleanup
+[[ $DETACH_MODE -eq 0 ]] && cleanup

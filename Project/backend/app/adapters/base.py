@@ -18,6 +18,8 @@ class VisualTemplateRecord:
     country: str | None
     doc_type: str | None
     created_at: str
+    page_num: int = 0
+    attributes_status: str = "pending"
 
 
 class StorageAdapter(ABC):
@@ -43,6 +45,7 @@ class StorageAdapter(ABC):
         doc_type: str | None,
         image_bytes: bytes,
         content_type: str,
+        page_num: int = 0,
     ) -> VisualTemplateRecord:
         raise NotImplementedError
 
@@ -72,4 +75,8 @@ class StorageAdapter(ABC):
 
     @abstractmethod
     def delete_visual_template(self, template_id: str) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_template_status(self, template_id: str, status: str) -> None:
         raise NotImplementedError

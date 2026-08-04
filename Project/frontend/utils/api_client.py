@@ -113,3 +113,27 @@ def list_visual_templates(country: str | None = None, doc_type: str | None = Non
 
 def get_template_image_url(template_id: str) -> str:
     return f"{_BASE}/visual-templates/{template_id}/image"
+
+
+def get_template_status(template_id: str) -> dict[str, Any]:
+    """Poll extraction status for a single template record."""
+    resp = requests.get(
+        f"{_BASE}/visual-templates/{template_id}/status", timeout=_TIMEOUT_SHORT
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def list_templates_by_type(
+    template_type: str,
+    country: str | None = None,
+    doc_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return visual templates filtered by type (e.g. 'document_template')."""
+    params: dict[str, str] = {}
+    if country:
+        params["country"] = country
+    if doc_type:
+        params["doc_type"] = doc_type
+    items = list_visual_templates(country=country, doc_type=doc_type)
+    return [i for i in items if i.get("template_type") == template_type]

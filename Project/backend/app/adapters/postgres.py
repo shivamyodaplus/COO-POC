@@ -55,6 +55,7 @@ class PostgresStorageAdapter(StorageAdapter):
         doc_type: str | None,
         image_bytes: bytes,
         content_type: str,
+        page_num: int = 0,
     ) -> VisualTemplateRecord:
         template_id = str(uuid.uuid4())
         with self._pool.connection() as conn, conn.cursor() as cur:
@@ -67,8 +68,10 @@ class PostgresStorageAdapter(StorageAdapter):
                     country,
                     doc_type,
                     image_data,
-                    image_content_type
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    image_content_type,
+                    page_num,
+                    attributes_status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')
                 RETURNING created_at
                 """,
                 (
@@ -79,6 +82,7 @@ class PostgresStorageAdapter(StorageAdapter):
                     doc_type,
                     image_bytes,
                     content_type,
+                    page_num,
                 ),
             )
             row = cur.fetchone()
@@ -91,6 +95,8 @@ class PostgresStorageAdapter(StorageAdapter):
             country=country,
             doc_type=doc_type,
             created_at=row[0].isoformat(),
+            page_num=page_num,
+            attributes_status="pending",
         )
 
     def list_visual_templates(
@@ -112,7 +118,8 @@ class PostgresStorageAdapter(StorageAdapter):
             where_sql = "WHERE " + " AND ".join(clauses)
 
         query = f"""
-            SELECT id, name, template_type, country, doc_type, created_at
+            SELECT id, name, template_type, country, doc_type, created_at,
+                   page_num, attributes_status
             FROM visual_templates
             {where_sql}
             ORDER BY created_at DESC
@@ -130,6 +137,8 @@ class PostgresStorageAdapter(StorageAdapter):
                         country=row[3],
                         doc_type=row[4],
                         created_at=row[5].isoformat(),
+                        page_num=int(row[6]) if row[6] is not None else 0,
+                        attributes_status=row[7] or "pending",
                     )
                 )
         return out
@@ -138,7 +147,8 @@ class PostgresStorageAdapter(StorageAdapter):
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, name, template_type, country, doc_type, created_at
+                SELECT id, name, template_type, country, doc_type, created_at,
+                       page_num, attributes_status
                 FROM visual_templates
                 WHERE id = %s
                 """,
@@ -155,6 +165,8 @@ class PostgresStorageAdapter(StorageAdapter):
             country=row[3],
             doc_type=row[4],
             created_at=row[5].isoformat(),
+            page_num=int(row[6]) if row[6] is not None else 0,
+            attributes_status=row[7] or "pending",
         )
 
     def get_visual_template_image(self, template_id: str) -> StoredImage | None:
@@ -201,3 +213,12 @@ class PostgresStorageAdapter(StorageAdapter):
                 deleted = cur.rowcount > 0
             conn.commit()
         return deleted
+
+    def update_template_status(self, template_id: str, status: str) -> None:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE visual_templates SET attributes_status = %s WHERE id = %s",
+                    (status, template_id),
+                )
+            conn.commit()
