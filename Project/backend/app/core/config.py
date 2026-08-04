@@ -21,9 +21,8 @@ class Settings(BaseSettings):
     QWEN_TEXT_BASE_URL: str = "http://localhost:8001/v1"
     QWEN_VL_BASE_URL: str = "http://localhost:8002/v1"
     # VLLM inference endpoints
-    VLLM_BASE_URL: str = "http://localhost:8080/v1"
-    VLLM_TEXT_MODEL: str = "Qwen/Qwen2.5-7B-Instruct"
-    VLLM_VISION_MODEL: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    VLLM_TEXT_MODEL: str = "qwen3-4b-awq"
+    VLLM_VISION_MODEL: str = "qwen3-vl-4b"
     VLLM_API_KEY: str = "vllm-local"
     VLLM_TEMPERATURE: float = 0.0
     VLLM_MAX_TOKENS: int = 2048

@@ -22,12 +22,13 @@ router = APIRouter()
 
 class CreateTransactionBody(BaseModel):
     user_id: str = Field(..., min_length=1, description="Caller identity string.")
+    tx_id: str | None = Field(None, min_length=1, description="Optional custom transaction ID (e.g. '1', 'order-42'). Auto-generated UUID if omitted.")
 
 
 @router.post("")
 async def create_transaction(body: CreateTransactionBody):
     assert_databases_ready()
-    record = transaction_service.create_transaction(body.user_id.strip())
+    record = transaction_service.create_transaction(body.user_id.strip(), tx_id=body.tx_id)
     return record
 
 

@@ -21,8 +21,12 @@ logger = get_logger(__name__)
 def load_ocr() -> None:
     global _ocr
     if not _PADDLE_AVAILABLE:
-        logger.warning("PaddleOCR not installed — OCR disabled. Text component of hybrid search will be skipped.")
-        return
+        raise RuntimeError(
+            "PaddleOCR is not installed but is required for hybrid search. "
+            "Ensure paddlepaddle and paddleocr are installed: "
+            "pip install paddlepaddle paddleocr "
+            "--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/"
+        )
     device = "gpu:0" if torch.cuda.is_available() else "cpu"
     logger.info("Loading PaddleOCR on %s...", device)
     _ocr = PaddleOCR(

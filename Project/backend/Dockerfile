@@ -14,13 +14,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-# 0 = CPU torch (default), 1 = CUDA 12.4 torch (set via docker-compose.gpu.yml)
-ARG CUDA_TORCH=0
-
 # Install deps first for layer caching (build context is project root)
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen
+
+# 0 = CPU torch (default), 1 = CUDA 12.8 torch (set via docker-compose.gpu.yml)
+# Declared here (after uv sync) so switching GPU/CPU does not bust the uv sync cache layer.
+ARG CUDA_TORCH=0
 
 # Reinstall torch/torchvision with CUDA 12.8 wheels when CUDA_TORCH=1
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -33,13 +34,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         echo "[torch] CPU build (default)"; \
     fi
 
-# PaddlePaddle has no PyPI wheel for linux/aarch64 — install manually from
-# PaddlePaddle's own package index. The || true ensures build continues even
-# if this fails (OCR will be gracefully disabled at runtime).
+# PaddlePaddle + PaddleOCR — required for hybrid search text component.
+# uv does not bundle pip in the venv; install pip first, then use it because
+# uv's strict platform-marker resolver rejects paddleocr on aarch64.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    /bin/uv pip install paddlepaddle paddleocr \
-    --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
-    || echo "[warn] PaddlePaddle install failed — OCR disabled"
+    /bin/uv pip install pip \
+    && /app/.venv/bin/python -m pip install --no-cache-dir paddlepaddle paddleocr \
+        --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/
 
 # LightGlue has no PyPI release — install from GitHub. The || true ensures
 # the build continues even if GitHub is unreachable (visual matching will be

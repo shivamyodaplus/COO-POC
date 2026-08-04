@@ -142,12 +142,32 @@ def ensure_schema() -> None:
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS transactions (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'active',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
+                """
+            )
+            # Migrate existing UUID column to TEXT (idempotent — no-op if already TEXT)
+            cur.execute(
+                """
+                DO $$ BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='transactions' AND column_name='id'
+                          AND data_type='uuid'
+                    ) THEN
+                        ALTER TABLE verification_reports
+                            DROP CONSTRAINT IF EXISTS verification_reports_transaction_id_fkey;
+                        ALTER TABLE transactions ALTER COLUMN id TYPE TEXT;
+                        ALTER TABLE verification_reports ALTER COLUMN transaction_id TYPE TEXT;
+                        ALTER TABLE verification_reports
+                            ADD CONSTRAINT verification_reports_transaction_id_fkey
+                            FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE;
+                    END IF;
+                END $$;
                 """
             )
             cur.execute(
@@ -159,7 +179,7 @@ def ensure_schema() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS verification_reports (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    transaction_id UUID NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                    transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
                     coo_doc_id TEXT NOT NULL DEFAULT '',
                     confirmed_template_id TEXT,
                     confirmed_template_name TEXT,

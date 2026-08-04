@@ -27,7 +27,7 @@ def get_llm(
 ) -> ChatOpenAI:
     """Return a ChatOpenAI client targeting the local VLLM text model."""
     return ChatOpenAI(
-        base_url=settings.VLLM_BASE_URL,
+        base_url=settings.QWEN_TEXT_BASE_URL,
         model=settings.VLLM_TEXT_MODEL,
         api_key=settings.VLLM_API_KEY,  # type: ignore[arg-type]
         temperature=temperature if temperature is not None else settings.VLLM_TEMPERATURE,
@@ -48,7 +48,7 @@ def get_vision_llm(
     encoded as base64 data URIs when calling ``encode_image_for_llm()``.
     """
     return ChatOpenAI(
-        base_url=settings.VLLM_BASE_URL,
+        base_url=settings.QWEN_VL_BASE_URL,
         model=settings.VLLM_VISION_MODEL,
         api_key=settings.VLLM_API_KEY,  # type: ignore[arg-type]
         temperature=temperature if temperature is not None else settings.VLLM_TEMPERATURE,

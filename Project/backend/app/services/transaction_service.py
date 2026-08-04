@@ -22,10 +22,15 @@ logger = get_logger(__name__)
 # Transactions                                                                 #
 # --------------------------------------------------------------------------- #
 
-def create_transaction(user_id: str) -> dict[str, Any]:
-    """Create a new transaction and return its record."""
+def create_transaction(user_id: str, tx_id: str | None = None) -> dict[str, Any]:
+    """Create a new transaction and return its record.
+
+    Args:
+        user_id: Owner of the transaction.
+        tx_id: Optional custom string ID. Falls back to a UUID if not provided.
+    """
     pool = get_pool()
-    tx_id = str(uuid.uuid4())
+    tx_id = tx_id.strip() if tx_id else str(uuid.uuid4())
     with pool.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
