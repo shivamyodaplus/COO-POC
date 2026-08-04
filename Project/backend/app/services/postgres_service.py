@@ -123,6 +123,57 @@ def ensure_schema() -> None:
                 ON milvus_outbox (status, next_retry_at, id)
                 """
             )
+
+            # ── Extend existing tables (idempotent) ─────────────────────
+            cur.execute(
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS transaction_id TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_category TEXT NOT NULL DEFAULT 'pacd'"
+            )
+            cur.execute(
+                "ALTER TABLE visual_templates ADD COLUMN IF NOT EXISTS extracted_attributes JSONB"
+            )
+
+            # ── Transaction management ───────────────────────────────────
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions (user_id)"
+            )
+
+            # ── Verification reports ─────────────────────────────────────
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS verification_reports (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    transaction_id UUID NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                    coo_doc_id TEXT NOT NULL DEFAULT '',
+                    confirmed_template_id TEXT,
+                    confirmed_template_name TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    discrepancy_table JSONB NOT NULL DEFAULT '[]',
+                    narrative TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_verification_reports_tx ON verification_reports (transaction_id)"
+            )
         conn.commit()
 
 

@@ -176,6 +176,24 @@ class PostgresStorageAdapter(StorageAdapter):
             content_type=row[1] or "application/octet-stream",
         )
 
+    def update_visual_template_attributes(
+        self,
+        template_id: str,
+        extracted_attributes: dict,
+    ) -> None:
+        import json as _json
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE visual_templates
+                    SET extracted_attributes = %s::jsonb
+                    WHERE id = %s
+                    """,
+                    (_json.dumps(extracted_attributes), template_id),
+                )
+            conn.commit()
+
     def delete_visual_template(self, template_id: str) -> bool:
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
