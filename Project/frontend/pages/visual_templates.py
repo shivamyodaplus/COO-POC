@@ -175,8 +175,18 @@ with tab_upload:
                 timeout=120,
             )
             if resp.ok:
+                record = resp.json()
                 st.success("Template uploaded successfully")
                 st.session_state.pop("vt_items", None)
+                # Show extracted attributes if already populated (may be None while background task runs)
+                attrs = record.get("extracted_attributes")
+                if attrs:
+                    st.info(
+                        "**Fields detected on this template:** "
+                        + ", ".join(f"`{k}`" for k in attrs.keys())
+                    )
+                else:
+                    st.caption("⏳ Extracting template field attributes in the background…")
             else:
                 st.error(f"Upload failed ({resp.status_code}): {resp.text}")
 

@@ -20,6 +20,11 @@ dependencies = [
     # paddlepaddle and paddleocr have no aarch64 pypi wheel;
     # install manually: pip install paddlepaddle paddleocr
     "nltk>=3.10.0",
+    # LangGraph / LLM inference stack
+    "langgraph>=0.2.0",
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",   # ChatOpenAI pointed at local VLLM server
 ]
 
 [tool.uv]

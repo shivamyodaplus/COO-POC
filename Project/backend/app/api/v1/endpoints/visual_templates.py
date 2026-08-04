@@ -92,6 +92,15 @@ async def upload_visual_template(
         file.content_type or "application/octet-stream",
     )
 
+    # Fire-and-forget: extract template attributes in the background (non-blocking)
+    asyncio.create_task(
+        _extract_and_persist_template_attributes(
+            template_id=record.id,
+            image_bytes=content,
+            filename=file.filename or "template",
+        )
+    )
+
     return {
         "id": record.id,
         "name": record.name,
@@ -99,7 +108,25 @@ async def upload_visual_template(
         "country": record.country,
         "doc_type": record.doc_type,
         "created_at": record.created_at,
+        "extracted_attributes": None,  # populated async in background
     }
+
+
+async def _extract_and_persist_template_attributes(
+    template_id: str,
+    image_bytes: bytes,
+    filename: str,
+) -> None:
+    """Background task: run TemplateAttributeWorkflow and persist results."""
+    try:
+        from app.services.coo_verification_service import run_template_attribute_extraction
+        await run_template_attribute_extraction(
+            template_id=template_id,
+            image_bytes=image_bytes,
+            filename=filename,
+        )
+    except Exception:
+        pass  # non-fatal — template still usable without extracted_attributes
 
 
 @router.get("")

@@ -47,6 +47,14 @@ class StorageAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_visual_template_attributes(
+        self,
+        template_id: str,
+        extracted_attributes: dict,
+    ) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
     def list_visual_templates(
         self,
         country: str | None,

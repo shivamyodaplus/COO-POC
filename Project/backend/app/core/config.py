@@ -10,11 +10,19 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     MILVUS_URI: str = "http://localhost:19530"
     MILVUS_COLLECTION: str = "templates"
+    PACD_MILVUS_COLLECTION: str = "pacd_coo_documents"
     HYBRID_ALPHA: float = 0.7
     POSTGRES_DSN: str = "postgresql://appuser:apppassword@localhost:5432/appdb"
     STORAGE_ADAPTER: str = "postgres"
     OUTBOX_POLL_INTERVAL: float = 5.0
     OUTBOX_MAX_RETRIES: int = 5
+    # VLLM inference endpoints
+    VLLM_BASE_URL: str = "http://localhost:8080/v1"
+    VLLM_TEXT_MODEL: str = "Qwen/Qwen2.5-7B-Instruct"
+    VLLM_VISION_MODEL: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    VLLM_API_KEY: str = "vllm-local"
+    VLLM_TEMPERATURE: float = 0.0
+    VLLM_MAX_TOKENS: int = 2048
 
 
 settings = Settings()

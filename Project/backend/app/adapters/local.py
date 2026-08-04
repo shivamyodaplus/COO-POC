@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.adapters.base import StorageAdapter, StoredImage, VisualTemplateRecord
+from app.adapters.base import StorageAdapter, StoredImage, VisualTemplateRecord  # noqa: F401
 
 IMAGE_DIR = Path("/app/images")
 TEMPLATE_DIR = Path("/app/visual_templates")
@@ -117,6 +117,18 @@ class LocalStorageAdapter(StorageAdapter):
                     content_type=entry.get("content_type", "application/octet-stream"),
                 )
         return None
+
+    def update_visual_template_attributes(
+        self,
+        template_id: str,
+        extracted_attributes: dict,
+    ) -> None:
+        entries = self._read_entries()
+        for entry in entries:
+            if entry["id"] == template_id:
+                entry["extracted_attributes"] = extracted_attributes  # type: ignore[assignment]
+                break
+        TEMPLATE_INDEX.write_text(json.dumps(entries), encoding="utf-8")
 
     def delete_visual_template(self, template_id: str) -> bool:
         entries = self._read_entries()
