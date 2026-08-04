@@ -18,34 +18,23 @@ _matcher   = None
 _device: torch.device | None = None
 
 
-def _ensure_lightglue_installed() -> None:
-    """Install lightglue via pip if it is not already importable."""
-    try:
-        import lightglue  # noqa: F401
-    except ImportError:
-        import subprocess
-        import sys
-
-        logger.info("lightglue not found — installing from GitHub via pip...")
-        subprocess.check_call(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "git+https://github.com/cvg/LightGlue.git",
-            ]
-        )
-        logger.info("lightglue installed successfully")
-
-
 def load_lightglue_models() -> None:
-    """Ensure lightglue is installed, then load SuperPoint + LightGlue into singletons."""
+    """Load SuperPoint + LightGlue into singletons.
+
+    No-op (with a warning) if lightglue is not installed so the rest of the
+    application continues to work — matching lightglue is installed at Docker
+    image build time, not at runtime.
+    """
     global _extractor, _matcher, _device
 
-    _ensure_lightglue_installed()
-
-    from lightglue import LightGlue, SuperPoint  # noqa: PLC0415
+    try:
+        from lightglue import LightGlue, SuperPoint  # noqa: PLC0415
+    except ImportError:
+        logger.warning(
+            "lightglue not installed — visual template matching (Phase 2) disabled. "
+            "Rebuild the Docker image to enable it: docker compose ... up --build app"
+        )
+        return
 
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Loading SuperPoint + LightGlue on %s...", _device)
