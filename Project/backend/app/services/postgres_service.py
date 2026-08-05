@@ -143,6 +143,9 @@ def ensure_schema() -> None:
             cur.execute(
                 "ALTER TABLE visual_templates ADD COLUMN IF NOT EXISTS attributes_status TEXT NOT NULL DEFAULT 'pending'"
             )
+            cur.execute(
+                "ALTER TABLE visual_templates ADD COLUMN IF NOT EXISTS doc_category TEXT NOT NULL DEFAULT 'any'"
+            )
 
             # ── Transaction management ───────────────────────────────────
             cur.execute(
@@ -254,27 +257,33 @@ def insert_documents_with_outbox(items: list[dict[str, Any]]) -> None:
                     ),
                 )
 
-                payload = {
-                    "id": item["id"],
-                    "country": item["country"],
-                    "doc_type": item["doc_type"],
-                    "file_name": item["file_name"],
-                    "ocr_text": item["ocr_text"],
-                    "dense": item["dense"],
-                }
-                cur.execute(
-                    """
-                    INSERT INTO milvus_outbox (
-                        entity_id,
-                        operation,
-                        payload,
-                        status,
-                        retry_count,
-                        next_retry_at
-                    ) VALUES (%s, %s, %s::jsonb, 'PENDING', 0, now())
-                    """,
-                    (item["id"], "UPSERT", json.dumps(payload)),
-                )
+                # Only enqueue a Milvus outbox entry when a dense vector is
+                # present — records without one (e.g. PACD pages whose Milvus
+                # indexing is handled by pacd_milvus_service) must be skipped.
+                dense = item.get("dense")
+                if dense:
+                    payload = {
+                        "id": item["id"],
+                        "country": item["country"],
+                        "doc_type": item["doc_type"],
+                        "doc_category": item.get("doc_category", ""),
+                        "file_name": item["file_name"],
+                        "ocr_text": item["ocr_text"],
+                        "dense": dense,
+                    }
+                    cur.execute(
+                        """
+                        INSERT INTO milvus_outbox (
+                            entity_id,
+                            operation,
+                            payload,
+                            status,
+                            retry_count,
+                            next_retry_at
+                        ) VALUES (%s, %s, %s::jsonb, 'PENDING', 0, now())
+                        """,
+                        (item["id"], "UPSERT", json.dumps(payload)),
+                    )
         conn.commit()
 
 

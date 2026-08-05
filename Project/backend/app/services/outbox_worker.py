@@ -49,6 +49,7 @@ async def _process_outbox_row(row: dict[str, Any]) -> None:
                 "id": payload["id"],
                 "country": payload["country"],
                 "doc_type": payload["doc_type"],
+                "doc_category": payload.get("doc_category", ""),
                 "file_name": payload["file_name"],
                 "ocr_text": payload.get("ocr_text", ""),
                 "dense": payload["dense"],

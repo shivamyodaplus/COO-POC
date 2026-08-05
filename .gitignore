@@ -10,3 +10,4 @@ chroma_layout_db/
 *.png
 *.sqlite3y
 chroma_layout_db/*
+.env

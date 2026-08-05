@@ -20,6 +20,7 @@ class VisualTemplateRecord:
     created_at: str
     page_num: int = 0
     attributes_status: str = "pending"
+    doc_category: str = "any"
 
 
 class StorageAdapter(ABC):
@@ -46,6 +47,7 @@ class StorageAdapter(ABC):
         image_bytes: bytes,
         content_type: str,
         page_num: int = 0,
+        doc_category: str = "any",
     ) -> VisualTemplateRecord:
         raise NotImplementedError
 
@@ -62,6 +64,7 @@ class StorageAdapter(ABC):
         self,
         country: str | None,
         doc_type: str | None,
+        doc_category: str | None = None,
     ) -> list[VisualTemplateRecord]:
         raise NotImplementedError
 

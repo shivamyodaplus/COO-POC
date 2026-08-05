@@ -25,19 +25,39 @@ def connect() -> None:
     logger.info("Connected to Milvus at %s", settings.MILVUS_URI)
 
 
+def _dense_dim_matches(client: MilvusClient) -> bool:
+    """Return True if the existing collection's dense field has the expected dim."""
+    try:
+        desc = client.describe_collection(COLLECTION)
+        for field in desc.get("fields", []):
+            if field.get("name") == "dense":
+                params = field.get("params", {})
+                return int(params.get("dim", 0)) == DENSE_DIM
+    except Exception:
+        pass
+    return False
+
+
 def ensure_collection() -> None:
     client = get_client()
 
     if client.has_collection(COLLECTION):
-        logger.info("Collection '%s' already exists — skipping creation", COLLECTION)
-        return
+        if _dense_dim_matches(client):
+            logger.info("Collection '%s' already exists — skipping creation", COLLECTION)
+            return
+        logger.warning(
+            "Collection '%s' has wrong dense dim (expected %d) — dropping and recreating",
+            COLLECTION, DENSE_DIM,
+        )
+        client.drop_collection(COLLECTION)
 
     # Build schema
     schema = client.create_schema(auto_id=False, enable_dynamic_field=False)
     schema.add_field("id",        DataType.VARCHAR,         is_primary=True, max_length=256)
     schema.add_field("country",   DataType.VARCHAR,         max_length=128)
-    schema.add_field("doc_type",  DataType.VARCHAR,         max_length=128)
-    schema.add_field("file_name", DataType.VARCHAR,         max_length=512)
+    schema.add_field("doc_type",     DataType.VARCHAR,      max_length=128)
+    schema.add_field("doc_category", DataType.VARCHAR,      max_length=16)
+    schema.add_field("file_name",    DataType.VARCHAR,      max_length=512)
     schema.add_field("ocr_text",  DataType.VARCHAR,         max_length=65535,
                  enable_analyzer=True, enable_match=True)
     schema.add_field("dense",     DataType.FLOAT_VECTOR,    dim=DENSE_DIM)
@@ -57,8 +77,9 @@ def ensure_collection() -> None:
                   params={"M": 16, "efConstruction": 200})
     idx.add_index("sparse",   index_type="SPARSE_INVERTED_INDEX", metric_type="BM25",
                   params={"drop_ratio_build": 0.2})
-    idx.add_index("country",  index_type="INVERTED")
-    idx.add_index("doc_type", index_type="INVERTED")
+    idx.add_index("country",      index_type="INVERTED")
+    idx.add_index("doc_type",     index_type="INVERTED")
+    idx.add_index("doc_category", index_type="INVERTED")
 
     client.create_collection(
         collection_name=COLLECTION,
@@ -80,6 +101,7 @@ def hybrid_search(
     doc_type: str | None,
     top_k: int = 3,
     alpha: float | None = None,
+    doc_category: str | None = None,
 ) -> list[dict[str, Any]]:
     from app.core.config import settings as cfg
 
@@ -90,6 +112,8 @@ def hybrid_search(
         filters.append(f'country == "{country.strip()}"')
     if doc_type and doc_type.strip():
         filters.append(f'doc_type == "{doc_type.strip()}"')
+    if doc_category and doc_category.strip():
+        filters.append(f'doc_category == "{doc_category.strip()}"')
     expr = " && ".join(filters) if filters else ""
 
     # When OCR text is empty, BM25 produces a zero sparse vector and

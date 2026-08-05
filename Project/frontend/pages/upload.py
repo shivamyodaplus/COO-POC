@@ -62,6 +62,7 @@ with tab_template:
                         "template_type": "document_template",
                         "country": t_country.strip(),
                         "doc_type": t_doc_type.strip(),
+                        "doc_category": "coo",
                     },
                     files={
                         "file": (
@@ -87,7 +88,7 @@ with tab_template:
                 pending_ids = [r["id"] for r in records]
                 status_placeholder = st.empty()
 
-                poll_limit = 60  # max 60 × 3 s = 3 min
+                poll_limit = 120  # max 120 × 3 s = 61 min
                 for _ in range(poll_limit):
                     if not pending_ids:
                         break

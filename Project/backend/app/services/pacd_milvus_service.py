@@ -148,6 +148,22 @@ def search_by_transaction(
     tx_filter_parts = " || ".join(f'transaction_id == "{tid}"' for tid in all_tx_ids)
     expr = f'doc_category == "{doc_category}" && ({tx_filter_parts})'
 
+    # Diagnostic: log total collection size and whether the filter matches anything
+    try:
+        total = client.get_collection_stats(COLLECTION).get("row_count", "?")
+        tx_count = client.query(
+            collection_name=COLLECTION,
+            filter=expr,
+            output_fields=["id"],
+            limit=1,
+        )
+        logger.info(
+            "PACD search: collection_rows=%s, filter_match≥%d, expr=%s",
+            total, len(tx_count), expr,
+        )
+    except Exception:
+        pass  # diagnostic only — never block the actual search
+
     out_fields = ["id", "user_id", "transaction_id", "doc_category",
                   "filename", "page_num", "chunk_index", "chunk_text"]
 

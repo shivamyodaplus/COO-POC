@@ -177,7 +177,8 @@ def pacd_indexing_node(state: GraphState) -> GraphState:
             )[:65535],
             "image_data":         jpeg_bytes,
             "image_content_type": "image/jpeg",
-            "dense":              dense_vecs[0] if dense_vecs else [],
+            # Note: no 'dense' here — PACD Milvus indexing is handled
+            # exclusively by pacd_milvus_service via all_milvus_records above.
         })
 
     # --- Persist ---------------------------------------------------------------
@@ -185,10 +186,17 @@ def pacd_indexing_node(state: GraphState) -> GraphState:
         try:
             pacd_milvus_service.insert_pacd_chunks(all_milvus_records)
             logger.info(
-                "pacd_indexing_node: inserted %d chunks into Milvus", len(all_milvus_records)
+                "pacd_indexing_node: inserted %d chunks into Milvus (tx=%s)",
+                len(all_milvus_records), transaction_id,
             )
         except Exception as exc:
             errors.append(f"pacd_indexing_node: Milvus insert failed — {exc}")
+    else:
+        logger.warning(
+            "pacd_indexing_node: 0 chunks to index for tx=%s — "
+            "vision_extraction returned %d KV pairs across %d pages",
+            transaction_id, len(extracted_kv_pairs), len(page_images),
+        )
 
     if postgres_records:
         try:
@@ -208,5 +216,6 @@ def pacd_indexing_node(state: GraphState) -> GraphState:
     return {  # type: ignore[return-value]
         **state,
         "errors": output.errors,
+        "pages_indexed": output.pages_indexed,
         "current_step": "pacd_indexing_node",
     }

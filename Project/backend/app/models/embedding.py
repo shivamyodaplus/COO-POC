@@ -92,8 +92,8 @@ def embed_text_chunks(
     if _bge_model is None:
         raise RuntimeError("BGE-M3 model not loaded. Call load_bge_model() first.")
     embeddings = _bge_model(texts)
-    dense_vecs = [v.tolist() for v in embeddings.dense]
-    sparse_vecs = [_to_sparse_dict(sv) for sv in embeddings.sparse]
+    dense_vecs = [v.tolist() for v in embeddings["dense"]]
+    sparse_vecs = [_to_sparse_dict(sv) for sv in embeddings["sparse"]]
     return dense_vecs, sparse_vecs
 
 
@@ -104,6 +104,6 @@ def embed_text_queries(
     if _bge_model is None:
         raise RuntimeError("BGE-M3 model not loaded. Call load_bge_model() first.")
     embeddings = _bge_model.encode_queries(texts)
-    dense_vecs = [v.tolist() for v in embeddings.dense]
-    sparse_vecs = [_to_sparse_dict(sv) for sv in embeddings.sparse]
+    dense_vecs = [v.tolist() for v in embeddings["dense"]]
+    sparse_vecs = [_to_sparse_dict(sv) for sv in embeddings["sparse"]]
     return dense_vecs, sparse_vecs

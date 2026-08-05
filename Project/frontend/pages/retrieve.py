@@ -67,10 +67,14 @@ def render_match_results(payload: dict) -> None:
         with st.container(border=True):
             c1, c2 = st.columns([1, 3])
             with c1:
-                st.image(
-                    f"{BACKEND_URL}/api/v1/visual-templates/{item['template_id']}/image",
-                    use_container_width=True,
-                )
+                try:
+                    _vt_resp = requests.get(
+                        f"{BACKEND_URL}/api/v1/visual-templates/{item['template_id']}/image",
+                        timeout=30,
+                    )
+                    st.image(_vt_resp.content if _vt_resp.ok else b"", use_container_width=True)
+                except Exception:
+                    st.caption("Image unavailable")
             with c2:
                 icon = TEMPLATE_ICONS.get(item.get("template_type", ""), "❓")
                 st.markdown(f"**{item['name']}** {icon} ({item['template_type']})")
@@ -155,8 +159,18 @@ if results is not None:
                     if query_img and rank == 1:
                         st.image(query_img, caption="Query", use_container_width=True)
                 with c_match:
-                    img_url = f"{BACKEND_URL}/api/v1/documents/images/{hit['id']}"
-                    st.image(img_url, caption=f"Match #{rank}", use_container_width=True)
+                    try:
+                        _img_resp = requests.get(
+                            f"{BACKEND_URL}/api/v1/documents/images/{hit['id']}",
+                            timeout=30,
+                        )
+                        st.image(
+                            _img_resp.content if _img_resp.ok else b"",
+                            caption=f"Match #{rank}",
+                            use_container_width=True,
+                        )
+                    except Exception:
+                        st.caption("Image unavailable")
                 with c_info:
                     st.subheader(f"#{rank} — {hit['file_name']}")
                     st.metric("Similarity", f"{hit['similarity']:.4f}")

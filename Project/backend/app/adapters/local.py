@@ -6,9 +6,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.adapters.base import StorageAdapter, StoredImage, VisualTemplateRecord  # noqa: F401
+from app.core.config import settings
 
-IMAGE_DIR = Path("/app/images")
-TEMPLATE_DIR = Path("/app/visual_templates")
+IMAGE_DIR = Path(settings.LOCAL_STORAGE_DIR) / "images"
+TEMPLATE_DIR = Path(settings.LOCAL_STORAGE_DIR) / "visual_templates"
 TEMPLATE_INDEX = TEMPLATE_DIR / "index.json"
 
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,6 +41,7 @@ class LocalStorageAdapter(StorageAdapter):
         image_bytes: bytes,
         content_type: str,
         page_num: int = 0,
+        doc_category: str = "any",
     ) -> VisualTemplateRecord:
         template_id = str(uuid.uuid4())
         image_path = TEMPLATE_DIR / f"{template_id}.bin"
@@ -51,6 +53,7 @@ class LocalStorageAdapter(StorageAdapter):
             "template_type": template_type,
             "country": country,
             "doc_type": doc_type,
+            "doc_category": doc_category,
             "content_type": content_type,
             "page_num": page_num,
             "attributes_status": "pending",
@@ -70,12 +73,14 @@ class LocalStorageAdapter(StorageAdapter):
             created_at=record["created_at"],
             page_num=page_num,
             attributes_status="pending",
+            doc_category=doc_category,
         )
 
     def list_visual_templates(
         self,
         country: str | None,
         doc_type: str | None,
+        doc_category: str | None = None,
     ) -> list[VisualTemplateRecord]:
         entries = self._read_entries()
         out: list[VisualTemplateRecord] = []
@@ -83,6 +88,8 @@ class LocalStorageAdapter(StorageAdapter):
             if country and entry.get("country") != country:
                 continue
             if doc_type and entry.get("doc_type") != doc_type:
+                continue
+            if doc_category and entry.get("doc_category", "any") != doc_category:
                 continue
             out.append(
                 VisualTemplateRecord(
@@ -92,6 +99,7 @@ class LocalStorageAdapter(StorageAdapter):
                     country=entry.get("country"),
                     doc_type=entry.get("doc_type"),
                     created_at=entry["created_at"],
+                    doc_category=entry.get("doc_category", "any"),
                 )
             )
         out.sort(key=lambda x: x.created_at, reverse=True)
@@ -107,6 +115,7 @@ class LocalStorageAdapter(StorageAdapter):
                     country=entry.get("country"),
                     doc_type=entry.get("doc_type"),
                     created_at=entry["created_at"],
+                    doc_category=entry.get("doc_category", "any"),
                 )
         return None
 

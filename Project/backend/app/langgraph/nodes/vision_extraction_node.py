@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from langchain_core.messages import HumanMessage
 
@@ -122,7 +123,15 @@ def vision_extraction_node(state: GraphState) -> GraphState:
 
         try:
             response = llm.invoke([message])
-            raw = str(response.content)
+            raw = str(response.content).strip()
+            if "<think>" in raw:
+                raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            if not raw.startswith("["):
+                m = re.search(r"\[.*\]", raw, flags=re.DOTALL)
+                if m:
+                    raw = m.group(0).strip()
             parsed = json.loads(raw)
             if not isinstance(parsed, list):
                 raise ValueError("Expected JSON array")

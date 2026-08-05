@@ -18,6 +18,7 @@ from app.services.postgres_service import close as postgres_close
 from app.services.postgres_service import connect as postgres_connect
 from app.services.postgres_service import ensure_schema
 from app.services.vllm_service import check_health
+from app.services.coo_verification_service import warm_workflows
 
 logger = get_logger(__name__)
 
@@ -36,6 +37,7 @@ async def lifespan(app: FastAPI):
     ensure_pacd_collection()
     postgres_connect()
     ensure_schema()
+    warm_workflows()
     worker_task = asyncio.create_task(run_outbox_worker())
 
     # Check vLLM endpoints — non-fatal: the app starts regardless.

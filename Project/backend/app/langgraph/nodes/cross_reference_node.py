@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.core.config import settings
 from app.langgraph.llm import get_llm
 from app.langgraph.schemas.coo_pacd_schemas import (
     CrossReferenceInput,
@@ -68,21 +70,25 @@ def _normalise(value: str) -> str:
 
 def _search_one_field(
     field_key: str,
-    coo_value: str,
+    dense_vec: list[float],
+    sparse_vec: dict[int, float],
     transaction_id: str,
     extra_tx_ids: list[str],
+    top_k: int,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Embed one field and run Milvus search. Returns (field_key, hits)."""
-    query_text = f"{field_key}: {coo_value}"
+    """Run Milvus search with pre-computed embeddings. Returns (field_key, hits)."""
     try:
-        dense_vecs, sparse_vecs = embed_text_queries([query_text])
         hits = pacd_milvus_service.search_by_transaction(
             transaction_id=transaction_id,
-            dense_vec=dense_vecs[0],
-            sparse_vec=sparse_vecs[0],
-            top_k=2,
+            dense_vec=dense_vec,
+            sparse_vec=sparse_vec,
+            top_k=top_k,
             extra_transaction_ids=extra_tx_ids or None,
         )
+        if not hits:
+            logger.debug(
+                "cross_reference_node: 0 hits for field '%s' (tx=%s)", field_key, transaction_id
+            )
     except Exception as exc:
         logger.warning("cross_reference_node: search failed for '%s': %s", field_key, exc)
         hits = []
@@ -94,12 +100,27 @@ def _llm_validate(
     unique_chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Call the text LLM to produce a structured verdict for all fields."""
-    # Build context block
-    context_lines = []
+    # Short-circuit: no PACD evidence — mark everything not_found without an LLM call.
+    # Avoids the empty-response crash when the model is sent a no-context prompt.
+    if not unique_chunks:
+        return [
+            {
+                "field_key": k,
+                "coo_value": v,
+                "pacd_value": None,
+                "verdict": "not_found_in_pacd",
+                "pacd_source_doc": None,
+                "pacd_source_page": None,
+            }
+            for k, v in coo_fields.items()
+        ]
+
+    # Build context block from all retrieved chunks.
+    context_lines: list[str] = []
     for chunk in unique_chunks:
         src = f"{chunk.get('filename', 'unknown')}, page {chunk.get('page_num', '?')}"
         context_lines.append(f"[{src}]\n{chunk.get('chunk_text', '')}")
-    context_block = "\n\n---\n\n".join(context_lines) or "(no PACD evidence found)"
+    context_block = "\n\n---\n\n".join(context_lines)
 
     # Build COO fields block
     fields_block = "\n".join(f"{k}: {v}" for k, v in coo_fields.items())
@@ -111,12 +132,27 @@ def _llm_validate(
 
     llm = get_llm()
     response = llm.invoke([SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=user_msg)])
-    raw = response.content if hasattr(response, "content") else str(response)
+    raw = (response.content if hasattr(response, "content") else str(response) or "").strip()
 
-    # Strip optional markdown fencing
-    raw = raw.strip()
+    if not raw:
+        raise ValueError("LLM returned an empty response")
+
+    # 1. Strip Qwen3 thinking blocks (<think>…</think>)
+    if "<think>" in raw:
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+    # 2. Strip markdown fences (```json … ``` or ``` … ```)
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+    # 3. If the model added prose before/after the JSON array, extract it.
+    if not raw.startswith("["):
+        m = re.search(r"\[.*\]", raw, flags=re.DOTALL)
+        if m:
+            raw = m.group(0).strip()
+
+    if not raw:
+        raise ValueError("LLM returned only a thinking block with no JSON output")
 
     return json.loads(raw)
 
@@ -166,16 +202,38 @@ def cross_reference_node(state: GraphState) -> GraphState:
         errors.append(f"cross_reference_node validation error: {exc}")
         return {**state, "errors": errors, "current_step": "cross_reference_node"}  # type: ignore[return-value]
 
-    # --- Concurrent search: top-2 per field -------------------------------------
+    # --- Batch-embed ALL field queries in one call (single-threaded, model-safe) ---
+    field_keys = list(coo_fields.keys())
+    field_values = list(coo_fields.values())
+    query_texts = [f"{k}: {v}" for k, v in zip(field_keys, field_values)]
+
+    try:
+        all_dense_vecs, all_sparse_vecs = embed_text_queries(query_texts)
+    except Exception as exc:
+        errors.append(f"cross_reference_node: batch embedding failed — {exc}")
+        return {**state, "errors": errors, "current_step": "cross_reference_node"}  # type: ignore[return-value]
+
+    logger.info(
+        "cross_reference_node: embedded %d field queries, searching tx=%s (top_k=%d)",
+        len(query_texts), transaction_id, settings.CROSS_REF_TOP_K,
+    )
+
+    # --- Concurrent Milvus search (I/O only — embeddings already computed) -----
     max_workers = min(len(coo_fields), 8)
     all_hits_by_field: dict[str, list[dict[str, Any]]] = {}
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
-                _search_one_field, fk, fv, transaction_id, extra_tx_ids
-            ): fk
-            for fk, fv in coo_fields.items()
+                _search_one_field,
+                field_keys[i],
+                all_dense_vecs[i],
+                all_sparse_vecs[i],
+                transaction_id,
+                extra_tx_ids,
+                settings.CROSS_REF_TOP_K,
+            ): field_keys[i]
+            for i in range(len(field_keys))
         }
         for future in as_completed(futures):
             field_key, hits = future.result()

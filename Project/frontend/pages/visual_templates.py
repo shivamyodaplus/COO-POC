@@ -37,10 +37,14 @@ def render_match_results(payload: dict) -> None:
         with st.container(border=True):
             c1, c2 = st.columns([1, 3])
             with c1:
-                st.image(
-                    f"{BACKEND_URL}/api/v1/visual-templates/{item['template_id']}/image",
-                    use_container_width=True,
-                )
+                try:
+                    _vt_r = requests.get(
+                        f"{BACKEND_URL}/api/v1/visual-templates/{item['template_id']}/image",
+                        timeout=30,
+                    )
+                    st.image(_vt_r.content if _vt_r.ok else b"", use_container_width=True)
+                except Exception:
+                    st.caption("Image unavailable")
             with c2:
                 icon = TEMPLATE_ICONS.get(item.get("template_type", ""), "❓")
                 st.markdown(f"**{item['name']}** {icon} ({item['template_type']})")
@@ -84,16 +88,26 @@ def render_match_results(payload: dict) -> None:
 
 
 st.header("Visual Templates")
-st.caption("Upload, manage, and test sign/signature/stamp/logo visual templates.")
+st.caption("Signatures and stamps used to verify documents. Upload, manage, and test templates.")
 
 tab_library, tab_upload, tab_match = st.tabs(["Library", "Upload", "Match Test"])
 
 with tab_library:
-    fc1, fc2 = st.columns(2)
+    fc1, fc2, fc3, fc4 = st.columns(4)
     with fc1:
         filter_country = st.text_input("Country filter", placeholder="Any", key="vt_filter_country")
     with fc2:
         filter_doc_type = st.text_input("Document Type filter", placeholder="Any", key="vt_filter_doc_type")
+    with fc3:
+        filter_doc_category = st.selectbox(
+            "Document Category", ["any", "coo", "pacd"], key="vt_filter_doc_category"
+        )
+    with fc4:
+        filter_template_type = st.selectbox(
+            "Template Type",
+            ["all", "signature", "sign", "stamp", "logo", "document_template"],
+            key="vt_filter_template_type",
+        )
 
     if st.button("Refresh Templates", key="vt_refresh_btn") or "vt_items" not in st.session_state:
         params: dict[str, str] = {}
@@ -101,6 +115,8 @@ with tab_library:
             params["country"] = filter_country.strip()
         if filter_doc_type.strip():
             params["doc_type"] = filter_doc_type.strip()
+        if filter_doc_category and filter_doc_category != "any":
+            params["doc_category"] = filter_doc_category
 
         resp = requests.get(f"{BACKEND_URL}/api/v1/visual-templates", params=params, timeout=60)
         if resp.ok:
@@ -109,25 +125,62 @@ with tab_library:
             st.session_state["vt_items"] = []
             st.error(f"Failed to load templates ({resp.status_code}): {resp.text}")
 
-    items: list[dict] = st.session_state.get("vt_items", [])
-    if not items:
-        st.info("No visual templates found for current filters.")
+    all_items: list[dict] = st.session_state.get("vt_items", [])
+
+    # Split into stamps/signatures and document templates
+    stamp_sig_items = [i for i in all_items if i.get("template_type") in {"signature", "sign", "stamp", "logo"}]
+    doc_template_items = [i for i in all_items if i.get("template_type") == "document_template"]
+
+    if filter_template_type == "all":
+        items = all_items
+    elif filter_template_type == "document_template":
+        items = doc_template_items
     else:
-        st.caption(f"{len(items)} template(s)")
+        items = [i for i in all_items if i.get("template_type") == filter_template_type]
+
+    # Show a summary banner
+    if stamp_sig_items:
+        st.success(
+            f"**{len(stamp_sig_items)} signature/stamp template(s)** loaded — "
+            f"{sum(1 for i in stamp_sig_items if i.get('template_type') == 'stamp')} stamp(s), "
+            f"{sum(1 for i in stamp_sig_items if i.get('template_type') in ('signature', 'sign'))} signature(s), "
+            f"{sum(1 for i in stamp_sig_items if i.get('template_type') == 'logo')} logo(s)"
+        )
+    else:
+        st.warning(
+            "No signature or stamp templates found. "
+            "Upload signature/stamp images in the **Upload** tab to enable visual verification."
+        )
+
+    if not items:
+        st.info("No templates found for the current filter.")
+    else:
+        st.caption(f"{len(items)} template(s) shown")
         for item in items:
+            is_stamp_sig = item.get("template_type") in {"signature", "sign", "stamp", "logo"}
             with st.container(border=True):
                 col_img, col_meta, col_actions = st.columns([1, 2, 1])
                 with col_img:
-                    st.image(
-                        f"{BACKEND_URL}/api/v1/visual-templates/{item['id']}/image",
-                        use_container_width=True,
-                    )
+                    try:
+                        _r = requests.get(
+                            f"{BACKEND_URL}/api/v1/visual-templates/{item['id']}/image",
+                            timeout=30,
+                        )
+                        if _r.ok and _r.content:
+                            st.image(_r.content, use_container_width=True)
+                        else:
+                            st.caption("Image unavailable")
+                    except Exception:
+                        st.caption("Image unavailable")
                 with col_meta:
                     icon = TEMPLATE_ICONS.get(item.get("template_type", ""), "❓")
                     st.markdown(f"**{item['name']}** {icon}")
-                    st.write(f"Type: {item['template_type']}")
+                    st.write(f"Type: `{item['template_type']}`")
                     st.write(f"Country: {item.get('country') or '-'}")
                     st.write(f"Doc Type: {item.get('doc_type') or '-'}")
+                    st.write(f"Category: {item.get('doc_category') or '-'}")
+                    if is_stamp_sig:
+                        st.caption("🔍 Used for document verification")
                     st.caption(f"ID: {item['id']}")
                 with col_actions:
                     if st.button("Delete", key=f"del_{item['id']}"):
@@ -197,8 +250,15 @@ with tab_match:
             type=["pdf", "png", "jpg", "jpeg", "tiff", "bmp", "gif", "webp"],
             key="vt_query_file",
         )
-        match_country = st.text_input("Country filter (optional)", key="vt_match_country")
-        match_doc_type = st.text_input("Document Type filter (optional)", key="vt_match_doc_type")
+        mc1, mc2, mc3 = st.columns(3)
+        with mc1:
+            match_country = st.text_input("Country filter (optional)", key="vt_match_country")
+        with mc2:
+            match_doc_type = st.text_input("Document Type filter (optional)", key="vt_match_doc_type")
+        with mc3:
+            match_doc_category = st.selectbox(
+                "Document Category", ["any", "coo", "pacd"], key="vt_match_doc_category"
+            )
         threshold = st.slider("Phase 1 Threshold", min_value=0.0, max_value=1.0, value=0.2, step=0.01)
         p2_threshold = st.slider(
             "Min Phase 2 Inliers (LightGlue)",
@@ -215,6 +275,7 @@ with tab_match:
             data = {
                 "country": match_country.strip(),
                 "doc_type": match_doc_type.strip(),
+                "doc_category": match_doc_category if match_doc_category != "any" else "",
                 "threshold": str(threshold),
                 "p2_threshold": str(p2_threshold),
             }

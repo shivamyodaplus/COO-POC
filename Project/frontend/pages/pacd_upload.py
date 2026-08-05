@@ -81,10 +81,15 @@ if st.button("Upload & Index PACD Documents", type="primary", use_container_widt
         for r in results:
             if r["ok"]:
                 d = r["data"]
-                with st.expander(f"✅ {r['filename']} — {d.get('pages_indexed', 0)} page(s) indexed", expanded=False):
-                    kv_pairs = d.get("extracted_kv_pairs") or []
+                kv_pairs = d.get("extracted_kv_pairs") or []
+                api_errors = d.get("errors") or []
+                pages_indexed = d.get("pages_indexed", 0)
+                label = f"✅ {r['filename']} — {pages_indexed} page(s) indexed into Milvus"
+                with st.expander(label, expanded=False):
+                    if api_errors:
+                        st.error("Pipeline errors:\n" + "\n".join(f"• {e}" for e in api_errors))
                     if kv_pairs:
-                        st.markdown("**Extracted Key-Value Pairs (sample):**")
+                        st.markdown("**Extracted Key-Value Pairs:**")
                         # Group by page for display
                         by_page: dict[int, list[dict]] = {}
                         for kv in kv_pairs:
@@ -97,9 +102,6 @@ if st.button("Upload & Index PACD Documents", type="primary", use_container_widt
                             ]
                             st.dataframe(table_data, use_container_width=True, hide_index=True)
                     else:
-                        st.info("No key-value pairs were extracted from this document.")
-                    if d.get("errors"):
-                        for err in d["errors"]:
-                            st.warning(err)
+                        st.warning("No key-value pairs were extracted — VLM may be unavailable or returned empty output.")
             else:
                 st.error(f"❌ {r['filename']}: {r['error']}")

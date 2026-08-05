@@ -20,6 +20,7 @@ from app.models.embedding import embed_image
 from app.models.ocr import extract_text
 from app.services.milvus_service import hybrid_search
 from app.utils.image_processing import preprocess_image
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def template_retrieval_node(state: GraphState) -> GraphState:
             document_id=state.get("document_id") or "",
             country=state.get("country"),
             doc_type=state.get("doc_type"),
-            top_k=2,
+            top_k=settings.COO_TEMPLATE_TOP_K,
         )
     except Exception as exc:
         errors.append(f"template_retrieval_node validation error: {exc}")

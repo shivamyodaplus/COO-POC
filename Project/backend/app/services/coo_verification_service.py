@@ -27,10 +27,26 @@ from app.services.postgres_service import get_adapter
 
 logger = logging.getLogger(__name__)
 
-# Lazy-initialised compiled graphs (one per process)
+# Eagerly-compiled graphs — built once at startup via warm_workflows()
 _coo_workflow: LangGraphAdapter | None = None
 _pacd_workflow: LangGraphAdapter | None = None
 _template_attr_workflow: LangGraphAdapter | None = None
+
+
+def warm_workflows() -> None:
+    """Compile and cache all LangGraph workflows.
+
+    Called once during app startup so the first real request pays no
+    compilation overhead.
+    """
+    global _coo_workflow, _pacd_workflow, _template_attr_workflow
+    logger.info("Compiling LangGraph workflows…")
+    _coo_workflow = LangGraphAdapter(build_coo_verification_workflow(), "coo_verification_workflow")
+    _pacd_workflow = LangGraphAdapter(build_pacd_ingestion_workflow(), "pacd_ingestion_workflow")
+    _template_attr_workflow = LangGraphAdapter(
+        build_template_attribute_workflow(), "template_attribute_workflow"
+    )
+    logger.info("LangGraph workflows compiled and ready")
 
 
 def _get_coo_workflow() -> LangGraphAdapter:
@@ -79,7 +95,7 @@ async def run_pacd_ingestion(
     )
     return {
         "document_id": result.get("document_id"),
-        "pages_indexed": len(result.get("page_images") or []),
+        "pages_indexed": result.get("pages_indexed", 0),  # set by pacd_indexing_node
         "extracted_kv_pairs": result.get("extracted_kv_pairs") or [],
         "errors": result.get("errors") or [],
     }
