@@ -405,8 +405,8 @@ async def match_visual_templates(
         template_images,
         threshold,
         None,
-        30,
-        100,
+        50,
+        150,
         p2_threshold,
     )
 

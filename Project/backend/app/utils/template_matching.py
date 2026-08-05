@@ -175,8 +175,8 @@ def match_templates(
     templates: Union[np.ndarray, list[np.ndarray]],
     threshold: float = 0.2,
     scales: np.ndarray = None,
-    canny_low: int = 30,
-    canny_high: int = 100,
+    canny_low: int = 50,
+    canny_high: int = 150,
     p2_threshold: int = 10,
     min_match_count: int = 4,
 ) -> TemplateMatchingOutput:
@@ -272,7 +272,7 @@ def match_templates(
         endY   = int((best_loc[1] + tH) * ratio)
 
         # ── Phase 2: LightGlue verification ───────────────────────────────────
-        if best_val >= threshold:
+        if _extractor is not None:
             # image must be BGR for Phase 2; convert if grayscale was passed
             image_bgr = (
                 cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
