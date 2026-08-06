@@ -9,7 +9,6 @@ st.set_page_config(
 pg = st.navigation([
     st.Page("pages/upload.py",              title="Upload Document",          icon="📤"),
     st.Page("pages/retrieve.py",            title="Retrieve Template",        icon="🔎"),
-    st.Page("pages/visual_templates.py",    title="Visual Templates",         icon="✍️"),
     st.Page("pages/stamp_verification.py",  title="Stamp Verification",       icon="🔏"),
     st.Page("pages/transactions.py",        title="Transactions",             icon="📋"),
     st.Page("pages/pacd_upload.py",         title="PACD Upload",              icon="📂"),
