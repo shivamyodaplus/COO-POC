@@ -176,8 +176,37 @@ def _get_structured_llm_cached(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def encode_image_for_llm(image_bytes: bytes, mime_type: str = "image/jpeg") -> str:
-    """Encode raw image bytes as a base64 data URI for use in vision LLM messages."""
+_MAX_VISION_LONG_EDGE = 1024  # pixels — caps visual tokens to ~960 (vs ~2500 for scale=2 PDFs)
+
+
+def encode_image_for_llm(
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    max_long_edge: int = _MAX_VISION_LONG_EDGE,
+) -> str:
+    """Encode raw image bytes as a base64 data URI for use in vision LLM messages.
+
+    Automatically resizes the image so its longest edge does not exceed
+    ``max_long_edge`` pixels before encoding.  This keeps visual token counts
+    within the vision model's context window regardless of the source DPI.
+    Pass ``max_long_edge=0`` to skip resizing.
+    """
     import base64
+    import io
+
+    from PIL import Image
+
+    if max_long_edge > 0:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        w, h = img.size
+        long_edge = max(w, h)
+        if long_edge > max_long_edge:
+            scale = max_long_edge / long_edge
+            img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            image_bytes = buf.getvalue()
+            mime_type = "image/jpeg"
+
     b64 = base64.b64encode(image_bytes).decode("ascii")
     return f"data:{mime_type};base64,{b64}"
