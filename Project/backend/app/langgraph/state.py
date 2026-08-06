@@ -50,6 +50,7 @@ class GraphState(TypedDict):
     doc_type: str | None             # document type hint
     extracted_fields: dict[str, Any] # structured key-value pairs (generic use)
     extracted_kv_pairs: list[dict[str, Any]]  # per-page [{page, key, value, confidence}]
+    structured_pages: list[dict[str, Any]]    # per-page structured extraction (PACD)
 
     # ------------------------------------------------------------------ #
     # Template matching                                                    #
@@ -62,9 +63,10 @@ class GraphState(TypedDict):
     # ------------------------------------------------------------------ #
     # COO verification pipeline                                            #
     # ------------------------------------------------------------------ #
-    coo_extracted_fields: dict[str, Any]       # fields extracted from COO document
+    coo_extracted_fields: dict[str, Any]       # flat fields from COO (backward compat)
+    coo_extracted_data: dict[str, Any]         # structured: {"header_fields": {}, "line_items": []}
     cross_reference_results: list[dict[str, Any]]  # list of DiscrepancyItem dicts
-    cross_reference_chunks: list[dict[str, Any]]   # deduplicated PACD chunks used in validation
+    cross_reference_details: dict[str, Any]    # full structured results (headers + items)
     verification_report: dict[str, Any]        # final report {table, narrative, summary}
 
     # ------------------------------------------------------------------ #

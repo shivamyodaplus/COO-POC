@@ -43,6 +43,8 @@ def reset_postgres() -> None:
                 TRUNCATE TABLE
                     verification_reports,
                     milvus_outbox,
+                    pacd_line_items,
+                    pacd_documents,
                     documents,
                     visual_templates,
                     transactions

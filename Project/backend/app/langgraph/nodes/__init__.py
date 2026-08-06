@@ -4,6 +4,7 @@ from app.langgraph.nodes.classification_node import classification_node
 from app.langgraph.nodes.extraction_node import extraction_node
 from app.langgraph.nodes.vision_extraction_node import vision_extraction_node
 from app.langgraph.nodes.pacd_indexing_node import pacd_indexing_node
+from app.langgraph.nodes.pacd_structuring_node import pacd_structuring_node
 from app.langgraph.nodes.template_attribute_node import template_attribute_node
 from app.langgraph.nodes.template_retrieval_node import template_retrieval_node
 from app.langgraph.nodes.template_confirmation_node import template_confirmation_node
@@ -17,6 +18,7 @@ __all__ = [
     "extraction_node",
     "vision_extraction_node",
     "pacd_indexing_node",
+    "pacd_structuring_node",
     "template_attribute_node",
     "template_retrieval_node",
     "template_confirmation_node",

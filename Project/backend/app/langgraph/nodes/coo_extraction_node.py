@@ -1,64 +1,79 @@
 """
 COOExtractionNode — Vision LLM extracts structured field values from the COO
-document using the confirmed template's field schema as a guided extraction prompt.
+document using ``with_structured_output(COOStructuredExtraction)``.
 
-If no template_attributes are available (template confirmation failed), the node
-falls back to general key-value extraction.
+Outputs header_fields (dict) + line_items (list) for downstream cross-reference.
+If a template is confirmed, uses the template's field schema as guidance.
+Falls back to general structured extraction if no template is available.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 
 from langchain_core.messages import HumanMessage
 
-from app.langgraph.llm import encode_image_for_llm, get_vision_llm
-from app.langgraph.schemas.coo_pacd_schemas import (
-    COOExtractionInput,
-    COOExtractionOutput,
-)
+from app.langgraph.llm import encode_image_for_llm, get_structured_llm
+from app.langgraph.schemas.structured_extraction import COOLineItem, COOStructuredExtraction
 from app.langgraph.state import GraphState
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT_GUIDED = """\
-You are a precise document data extraction assistant.
-Extract the following labeled fields from the COO (Certificate of Origin) document image.
+You are a precise document data extraction assistant specializing in Certificates of Origin (COO).
 
-Fields to extract:
+Extract structured data from the provided COO document image.
+
+The document uses this template with the following labeled fields:
 {field_list}
 
-Respond ONLY with a JSON object where keys are the field names and values are the
-extracted string values.  Use null for fields not found.
+Extract:
+1. **header_fields** — all header/metadata fields (use the exact field names listed above as keys).
+2. **line_items** — each product/goods entry listed on the certificate. For each item extract:
+   hs_code, description, quantity, unit, value, weight, origin_country (only include what's present).
 
-Example:
-{{ "exporter_name": "ABC Trading Co.", "country_of_origin": "Egypt" }}
+Rules:
+- Use snake_case for header field keys.
+- If a field is not visible, omit it entirely (do not set null).
+- Each distinct product with its own line/row should be a separate line_item entry.
+- If items are numbered on the document, preserve the item_number.
 """
 
 _SYSTEM_PROMPT_GENERAL = """\
-You are a precise document data extraction assistant.
-Extract ALL labeled key-value information from this COO (Certificate of Origin) document image.
+You are a precise document data extraction assistant specializing in Certificates of Origin (COO).
 
-Respond ONLY with a JSON object where keys are field names in snake_case and values are the
-extracted string values.
+Extract structured data from the provided COO document image.
 
-Return {} if nothing can be extracted.
+Extract:
+1. **header_fields** — all header/metadata fields as a dictionary with snake_case keys.
+   Expected fields include (extract any you find): exporter_name, consignee_name,
+   country_of_origin, transport_details, port_of_loading, port_of_discharge,
+   certificate_number, date_of_issue, issuing_authority, invoice_number, remarks.
+2. **line_items** — each product/goods entry listed on the certificate. For each item extract:
+   hs_code, description, quantity, unit, value, weight, origin_country (only include what's present).
+
+Rules:
+- If a field is not visible, omit it entirely.
+- Each distinct product should be a separate line_item entry.
+- If items are numbered on the document, preserve the item_number.
 """
 
 
 def coo_extraction_node(state: GraphState) -> GraphState:
-    """LangGraph node: extract COO field values via Vision LLM.
+    """LangGraph node: extract structured COO data via Vision LLM.
+
+    Uses with_structured_output(COOStructuredExtraction) for reliable parsing.
 
     Reads
     -----
-    state["page_images"]         — COO page images (first used)
+    state["page_images"]         — COO page images
     state["template_attributes"] — field schema from confirmed template
     state["document_id"]
 
     Writes
     ------
-    state["coo_extracted_fields"]  — {field_key: value} flat dict
+    state["coo_extracted_fields"]  — {field_key: value} flat dict (backward compat)
+    state["coo_extracted_data"]    — {"header_fields": {...}, "line_items": [...]}
     state["current_step"]
     Appends to state["errors"]
     """
@@ -72,59 +87,74 @@ def coo_extraction_node(state: GraphState) -> GraphState:
         errors.append("coo_extraction_node: no page_images in state")
         return {**state, "errors": errors, "current_step": "coo_extraction_node"}  # type: ignore[return-value]
 
-    try:
-        node_input = COOExtractionInput(
-            document_id=state.get("document_id") or "",
-            coo_image_b64=encode_image_for_llm(page_images[0], "image/jpeg"),
-            template_attributes=template_attributes,
-        )
-    except Exception as exc:
-        errors.append(f"coo_extraction_node validation error: {exc}")
-        return {**state, "errors": errors, "current_step": "coo_extraction_node"}  # type: ignore[return-value]
-
+    # Build prompt based on template availability
     if template_attributes:
         field_list = "\n".join(f"- {k}: {v}" for k, v in template_attributes.items())
         system_text = _SYSTEM_PROMPT_GUIDED.format(field_list=field_list)
     else:
         system_text = _SYSTEM_PROMPT_GENERAL
 
-    llm = get_vision_llm(temperature=0.0)
-    message = HumanMessage(
-        content=[
-            {"type": "text", "text": system_text},
-            {
-                "type": "image_url",
-                "image_url": {"url": node_input.coo_image_b64},
-            },
-        ]
+    # Use structured output — guaranteed to return COOStructuredExtraction
+    llm = get_structured_llm(COOStructuredExtraction, temperature=0.0, vision=True)
+
+    # Process all pages and merge results
+    merged_headers: dict[str, str] = {}
+    merged_items: list[dict] = []
+
+    for page_num, image_bytes in enumerate(page_images, start=1):
+        image_b64 = encode_image_for_llm(image_bytes, "image/jpeg")
+        message = HumanMessage(
+            content=[
+                {"type": "text", "text": system_text},
+                {"type": "image_url", "image_url": {"url": image_b64}},
+            ]
+        )
+
+        try:
+            result: COOStructuredExtraction = llm.invoke([message])  # type: ignore[assignment]
+
+            # Merge header fields (first page takes priority)
+            for k, v in result.header_fields.items():
+                if k not in merged_headers:
+                    merged_headers[k] = v
+
+            # Append line items with page tracking
+            for item in result.line_items:
+                item_dict = item.model_dump(exclude_none=True)
+                item_dict["_source_page"] = page_num
+                merged_items.append(item_dict)
+
+            logger.info(
+                "coo_extraction_node p%d: %d headers, %d items",
+                page_num, len(result.header_fields), len(result.line_items),
+            )
+        except Exception as exc:
+            errors.append(f"coo_extraction_node p{page_num}: extraction failed — {exc}")
+            logger.warning("coo_extraction_node p%d: %s", page_num, exc)
+
+    # Build structured output
+    coo_extracted_data = {
+        "header_fields": merged_headers,
+        "line_items": merged_items,
+    }
+
+    # Also produce flat dict for backward compatibility
+    coo_extracted_fields = dict(merged_headers)
+    for i, item in enumerate(merged_items, start=1):
+        prefix = f"item_{item.get('item_number', i)}"
+        for field in ["hs_code", "description", "quantity", "value", "weight"]:
+            if field in item:
+                coo_extracted_fields[f"{prefix}_{field}"] = item[field]
+
+    logger.info(
+        "coo_extraction_node: extracted %d header fields + %d line items",
+        len(merged_headers), len(merged_items),
     )
-
-    raw_response = ""
-    coo_fields: dict[str, str] = {}
-
-    try:
-        response = llm.invoke([message])
-        raw_response = str(response.content)
-        parsed = json.loads(raw_response)
-        if not isinstance(parsed, dict):
-            raise ValueError("Expected a JSON object")
-        coo_fields = {k: str(v) for k, v in parsed.items() if v is not None}
-    except (json.JSONDecodeError, ValueError) as exc:
-        errors.append(f"coo_extraction_node: bad LLM JSON — {exc}: {raw_response[:200]}")
-    except Exception as exc:
-        errors.append(f"coo_extraction_node: LLM call failed — {exc}")
-
-    COOExtractionOutput(
-        coo_extracted_fields=coo_fields,
-        raw_llm_response=raw_response,
-        errors=errors,
-    )
-
-    logger.info("coo_extraction_node: extracted %d fields", len(coo_fields))
 
     return {  # type: ignore[return-value]
         **state,
-        "coo_extracted_fields": coo_fields,
+        "coo_extracted_fields": coo_extracted_fields,
+        "coo_extracted_data": coo_extracted_data,
         "errors": errors,
         "current_step": "coo_extraction_node",
     }

@@ -203,6 +203,60 @@ def ensure_schema() -> None:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_verification_reports_tx ON verification_reports (transaction_id)"
             )
+
+            # ── Structured PACD storage ──────────────────────────────────
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pacd_documents (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    transaction_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    doc_type TEXT NOT NULL DEFAULT 'other',
+                    filename TEXT NOT NULL DEFAULT '',
+                    page_numbers INTEGER[] NOT NULL DEFAULT '{}',
+                    header_fields JSONB NOT NULL DEFAULT '{}',
+                    raw_ocr_text TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pacd_docs_transaction ON pacd_documents (transaction_id)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pacd_docs_user ON pacd_documents (user_id)"
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pacd_line_items (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    pacd_document_id UUID NOT NULL REFERENCES pacd_documents(id) ON DELETE CASCADE,
+                    transaction_id TEXT NOT NULL,
+                    line_number INTEGER,
+                    hs_code TEXT,
+                    hs_code_normalized TEXT,
+                    description TEXT NOT NULL DEFAULT '',
+                    quantity TEXT,
+                    unit TEXT,
+                    unit_price TEXT,
+                    total_value TEXT,
+                    weight TEXT,
+                    origin_country TEXT,
+                    raw_text TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pacd_items_transaction ON pacd_line_items (transaction_id)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pacd_items_hs ON pacd_line_items (hs_code_normalized)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pacd_items_doc ON pacd_line_items (pacd_document_id)"
+            )
         conn.commit()
 
 
@@ -383,3 +437,190 @@ def mark_outbox_failed_or_retry(
                 ),
             )
         conn.commit()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Structured PACD Document CRUD
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def insert_pacd_document(
+    transaction_id: str,
+    user_id: str,
+    doc_type: str,
+    filename: str,
+    page_numbers: list[int],
+    header_fields: dict[str, str],
+    raw_ocr_text: str = "",
+) -> str:
+    """Insert a logical PACD document and return its UUID."""
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO pacd_documents
+                    (transaction_id, user_id, doc_type, filename, page_numbers, header_fields, raw_ocr_text)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
+                RETURNING id
+                """,
+                (
+                    transaction_id,
+                    user_id,
+                    doc_type,
+                    filename,
+                    page_numbers,
+                    json.dumps(header_fields),
+                    raw_ocr_text[:100000],
+                ),
+            )
+            doc_id = str(cur.fetchone()[0])
+        conn.commit()
+    return doc_id
+
+
+def insert_pacd_line_items(
+    pacd_document_id: str,
+    transaction_id: str,
+    items: list[dict[str, Any]],
+) -> list[str]:
+    """Insert line items for a PACD document. Returns list of created UUIDs."""
+    if not items:
+        return []
+    pool = get_pool()
+    item_ids: list[str] = []
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            for item in items:
+                hs_raw = item.get("hs_code") or ""
+                # Normalize HS code: strip dots/spaces, take first 6 digits
+                hs_normalized = hs_raw.replace(".", "").replace(" ", "")[:6] if hs_raw else None
+                cur.execute(
+                    """
+                    INSERT INTO pacd_line_items
+                        (pacd_document_id, transaction_id, line_number, hs_code,
+                         hs_code_normalized, description, quantity, unit,
+                         unit_price, total_value, weight, origin_country, raw_text)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        pacd_document_id,
+                        transaction_id,
+                        item.get("line_number") or item.get("item_number"),
+                        hs_raw or None,
+                        hs_normalized,
+                        item.get("description", ""),
+                        item.get("quantity"),
+                        item.get("unit"),
+                        item.get("unit_price"),
+                        item.get("total_value"),
+                        item.get("weight"),
+                        item.get("origin_country"),
+                        item.get("raw_text"),
+                    ),
+                )
+                item_ids.append(str(cur.fetchone()[0]))
+        conn.commit()
+    return item_ids
+
+
+def get_pacd_documents_by_transaction(transaction_id: str) -> list[dict[str, Any]]:
+    """Fetch all PACD documents (with header fields) for a transaction."""
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, transaction_id, user_id, doc_type, filename,
+                       page_numbers, header_fields, created_at
+                FROM pacd_documents
+                WHERE transaction_id = %s
+                ORDER BY created_at
+                """,
+                (transaction_id,),
+            )
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in (cur.description or [])]
+    results = []
+    for row in rows:
+        item = dict(zip(columns, row))
+        # Ensure header_fields is a dict
+        hf = item.get("header_fields")
+        if isinstance(hf, str):
+            item["header_fields"] = json.loads(hf)
+        item["id"] = str(item["id"])
+        results.append(item)
+    return results
+
+
+def get_pacd_line_items_by_transaction(
+    transaction_id: str,
+    hs_code_prefix: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch PACD line items for a transaction, optionally filtered by HS code prefix."""
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            if hs_code_prefix:
+                # Normalize the search prefix too
+                normalized_prefix = hs_code_prefix.replace(".", "").replace(" ", "")[:6]
+                cur.execute(
+                    """
+                    SELECT li.*, pd.filename AS source_filename, pd.doc_type AS source_doc_type
+                    FROM pacd_line_items li
+                    JOIN pacd_documents pd ON pd.id = li.pacd_document_id
+                    WHERE li.transaction_id = %s
+                      AND li.hs_code_normalized LIKE %s
+                    ORDER BY li.line_number
+                    """,
+                    (transaction_id, f"{normalized_prefix}%"),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT li.*, pd.filename AS source_filename, pd.doc_type AS source_doc_type
+                    FROM pacd_line_items li
+                    JOIN pacd_documents pd ON pd.id = li.pacd_document_id
+                    WHERE li.transaction_id = %s
+                    ORDER BY li.line_number
+                    """,
+                    (transaction_id,),
+                )
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in (cur.description or [])]
+    results = []
+    for row in rows:
+        item = dict(zip(columns, row))
+        item["id"] = str(item["id"])
+        item["pacd_document_id"] = str(item["pacd_document_id"])
+        results.append(item)
+    return results
+
+
+def get_pacd_line_items_by_ids(item_ids: list[str]) -> list[dict[str, Any]]:
+    """Fetch specific PACD line items by their UUIDs."""
+    if not item_ids:
+        return []
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            placeholders = ",".join(["%s"] * len(item_ids))
+            cur.execute(
+                f"""
+                SELECT li.*, pd.filename AS source_filename, pd.doc_type AS source_doc_type
+                FROM pacd_line_items li
+                JOIN pacd_documents pd ON pd.id = li.pacd_document_id
+                WHERE li.id::text IN ({placeholders})
+                """,
+                item_ids,
+            )
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in (cur.description or [])]
+    results = []
+    for row in rows:
+        item = dict(zip(columns, row))
+        item["id"] = str(item["id"])
+        item["pacd_document_id"] = str(item["pacd_document_id"])
+        results.append(item)
+    return results

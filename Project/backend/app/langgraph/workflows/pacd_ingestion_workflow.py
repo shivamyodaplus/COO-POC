@@ -1,18 +1,18 @@
 """
-PACDIngestionWorkflow — ingests PACD document pages into the knowledge base.
+PACDIngestionWorkflow — ingests PACD document pages into structured storage.
 
 Graph topology
 --------------
     START
       │
       ▼
-  ingestion_node         validate file, assign document_id, detect MIME, load page images
+  ingestion_node           validate file, assign document_id, detect MIME, load page images
       │
       ▼
-  vision_extraction_node  Vision LLM: extract key-value pairs from every page
-      │
+  vision_extraction_node   Vision LLM: extract structured data per page
+      │                    (uses with_structured_output for PACD → header_fields + line_items)
       ▼
-  pacd_indexing_node      store embeddings + KV data in Milvus + Postgres
+  pacd_structuring_node    merge pages into logical documents, store in Postgres + Milvus
       │
       ▼
     END
@@ -34,13 +34,16 @@ Usage
         "messages": [],
         "errors": [],
         "extracted_kv_pairs": [],
+        "structured_pages": [],
         "page_images": [],
         "extracted_fields": {},
         "retrieved_templates": [],
         "template_attributes": {},
         "cross_reference_results": [],
+        "cross_reference_details": {},
         "verification_report": {},
         "coo_extracted_fields": {},
+        "coo_extracted_data": {},
     })
 """
 
@@ -50,7 +53,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.langgraph.nodes.ingestion_node import ingestion_node
-from app.langgraph.nodes.pacd_indexing_node import pacd_indexing_node
+from app.langgraph.nodes.pacd_structuring_node import pacd_structuring_node
 from app.langgraph.nodes.vision_extraction_node import vision_extraction_node
 from app.langgraph.state import GraphState
 
@@ -67,7 +70,7 @@ def build_pacd_ingestion_workflow() -> CompiledStateGraph:
 
     graph.add_node("ingestion_node", ingestion_node)
     graph.add_node("vision_extraction_node", vision_extraction_node)
-    graph.add_node("pacd_indexing_node", pacd_indexing_node)
+    graph.add_node("pacd_structuring_node", pacd_structuring_node)
 
     graph.add_edge(START, "ingestion_node")
     graph.add_conditional_edges(
@@ -75,7 +78,7 @@ def build_pacd_ingestion_workflow() -> CompiledStateGraph:
         _abort_on_ingestion_failure,
         {"vision_extraction_node": "vision_extraction_node", END: END},
     )
-    graph.add_edge("vision_extraction_node", "pacd_indexing_node")
-    graph.add_edge("pacd_indexing_node", END)
+    graph.add_edge("vision_extraction_node", "pacd_structuring_node")
+    graph.add_edge("pacd_structuring_node", END)
 
     return graph.compile()
