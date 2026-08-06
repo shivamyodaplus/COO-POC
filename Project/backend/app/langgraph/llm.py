@@ -8,10 +8,10 @@ Provider: ``local`` (default)
     and a dummy API key is passed (VLLM ignores it).
 
 Provider: ``bedrock``
-    Uses ChatBedrockConverse from langchain-aws, targeting AWS Bedrock.
-    AWS credentials are resolved by boto3's standard credential chain
-    (env vars AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN,
-    ~/.aws/credentials, IAM instance role, etc.).
+    Uses ChatOpenAI pointed at Bedrock's OpenAI-compatible Chat Completions
+    endpoint (``https://bedrock-mantle.<region>.api.aws/v1``) with a short-term
+    Bedrock API key supplied via ``BEDROCK_API_KEY``.  No boto3 or IAM
+    credentials are required.
 
 Factories are cached via ``@lru_cache`` so identical parameter combinations
 return the same client instance across the entire application lifecycle.
@@ -62,16 +62,13 @@ def _get_llm_cached(
     _max_tokens = max_tokens if max_tokens is not None else settings.VLLM_MAX_TOKENS
 
     if settings.LLM_PROVIDER == "bedrock":
-        from langchain_aws import ChatBedrockConverse
-
-        return ChatBedrockConverse(
-            model_id=settings.BEDROCK_TEXT_MODEL,
-            region_name=settings.BEDROCK_REGION,
+        # api_key and base_url are read automatically from OPENAI_API_KEY
+        # and OPENAI_BASE_URL environment variables (AWS Bedrock OpenAI pattern).
+        return ChatOpenAI(
+            model=settings.BEDROCK_TEXT_MODEL,
             temperature=_temp,
             max_tokens=_max_tokens if _max_tokens is not None else settings.BEDROCK_MAX_TOKENS,
             streaming=streaming,
-            # Disable Qwen3 extended thinking on Bedrock so output is plain text.
-            additional_model_request_fields={"thinking": {"type": "disabled"}},
         )
 
     return ChatOpenAI(
@@ -115,11 +112,10 @@ def _get_vision_llm_cached(
     _max_tokens = max_tokens if max_tokens is not None else settings.VLLM_MAX_TOKENS
 
     if settings.LLM_PROVIDER == "bedrock":
-        from langchain_aws import ChatBedrockConverse
-
-        return ChatBedrockConverse(
-            model_id=settings.BEDROCK_VISION_MODEL,
-            region_name=settings.BEDROCK_REGION,
+        # api_key and base_url are read automatically from OPENAI_API_KEY
+        # and OPENAI_BASE_URL environment variables (AWS Bedrock OpenAI pattern).
+        return ChatOpenAI(
+            model=settings.BEDROCK_VISION_MODEL,
             temperature=_temp,
             max_tokens=_max_tokens if _max_tokens is not None else settings.BEDROCK_MAX_TOKENS,
             streaming=streaming,

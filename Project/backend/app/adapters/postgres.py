@@ -118,7 +118,7 @@ class PostgresStorageAdapter(StorageAdapter):
             clauses.append("doc_type = %s")
             params.append(doc_type)
         if doc_category:
-            clauses.append("doc_category = %s")
+            clauses.append("(doc_category = %s OR doc_category = 'any')")
             params.append(doc_category)
 
         where_sql = ""

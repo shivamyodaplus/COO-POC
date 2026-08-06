@@ -11,3 +11,5 @@ chroma_layout_db/
 *.sqlite3y
 chroma_layout_db/*
 .env
+*.env
+Project/.env

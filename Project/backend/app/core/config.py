@@ -1,5 +1,4 @@
 from pathlib import Path
-import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 
@@ -40,7 +39,7 @@ class Settings(BaseSettings):
     QWEN_TEXT_BASE_URL: str = "http://localhost:8001/v1"
     QWEN_VL_BASE_URL: str = "http://localhost:8002/v1"
     # LLM provider selection: "local" (VLLM) or "bedrock" (AWS Bedrock)
-    LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "local").lower()
+    LLM_PROVIDER: str = "local"
 
     # VLLM inference endpoints
     VLLM_TEXT_MODEL: str = "qwen3-4b-awq"
@@ -51,11 +50,14 @@ class Settings(BaseSettings):
     VLLM_MAX_TOKENS: int | None = None
 
     # AWS Bedrock settings (used when LLM_PROVIDER="bedrock")
-    # AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
-    # are intentionally not declared here — boto3 reads them from the standard
-    # credential chain (env vars, ~/.aws/credentials, IAM role, etc.).
+    # Authentication uses a Bedrock short-term API key via the OpenAI-compatible
+    # Chat Completions endpoint (https://bedrock-mantle.<region>.api.aws/v1).
+    # Generate a key at: https://console.aws.amazon.com/bedrock/home#/api-keys/short-term/create
+    BEDROCK_API_KEY: str = ""
     BEDROCK_TEXT_MODEL: str = "qwen.qwen3-32b-v1:0"
-    BEDROCK_VISION_MODEL: str = "nvidia.nemotron-nano-12b-v2"
+    # BEDROCK_VISION_MODEL: str = "nvidia.nemotron-nano-12b-v2"
+    # BEDROCK_VISION_MODEL: str = "anthropic.claude-sonnet-5"
+    BEDROCK_VISION_MODEL: str = "anthropic.claude-sonnet-5"
     BEDROCK_REGION: str = "ap-south-1"
     # Bedrock Converse requires an explicit maxTokens; None is rejected or
     # defaults to the model maximum, which combined with a large prompt can

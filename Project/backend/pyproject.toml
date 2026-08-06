@@ -29,6 +29,8 @@ dependencies = [
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",   # ChatOpenAI pointed at local VLLM server
     "langchain-aws>=0.2.0",       # ChatBedrockConverse for AWS Bedrock provider
+    "anthropic[bedrock]>=0.120.2",
+    "langchain-anthropic>=1.5.4",
 ]
 
 [tool.uv]

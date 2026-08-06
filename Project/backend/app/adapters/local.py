@@ -89,8 +89,10 @@ class LocalStorageAdapter(StorageAdapter):
                 continue
             if doc_type and entry.get("doc_type") != doc_type:
                 continue
-            if doc_category and entry.get("doc_category", "any") != doc_category:
-                continue
+            if doc_category:
+                entry_cat = entry.get("doc_category", "any")
+                if entry_cat != doc_category and entry_cat != "any":
+                    continue
             out.append(
                 VisualTemplateRecord(
                     id=entry["id"],

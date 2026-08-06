@@ -33,6 +33,15 @@ services:
       - LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu
       - QWEN_TEXT_BASE_URL=http://host.docker.internal:${QWEN_TEXT_PORT:-8001}/v1
       - QWEN_VL_BASE_URL=http://host.docker.internal:${QWEN_VL_PORT:-8002}/v1
+      # LLM provider: "local" (vLLM) or "bedrock" (AWS Bedrock)
+      - LLM_PROVIDER=${LLM_PROVIDER:-local}
+      # AWS Bedrock — OpenAI-compatible endpoint credentials
+      # Set OPENAI_API_KEY to your Bedrock short-term key and
+      # OPENAI_BASE_URL to https://bedrock-mantle.<region>.api.aws/v1
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - BEDROCK_TEXT_MODEL=${BEDROCK_TEXT_MODEL:-qwen.qwen3-32b-v1:0}
+      - BEDROCK_VISION_MODEL=${BEDROCK_VISION_MODEL:-anthropic.claude-sonnet-5}
       # BGE-M3 device override — 'cuda' forces GPU even on ARM64 where
       # torch.cuda.is_available() returns False.  Leave empty for auto-detect.
       - BGE_M3_DEVICE=${BGE_M3_DEVICE:-cuda}
@@ -41,6 +50,8 @@ services:
       - PYTORCH_JIT=0
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
+      - ~/.paddleocr:/root/.paddleocr
+      - ~/.cache/torch:/root/.cache/torch
       - app_images:/app/images
     depends_on:
       milvus:

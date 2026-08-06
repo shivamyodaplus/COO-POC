@@ -35,15 +35,20 @@ fi
 
 QWEN_TEXT_PORT="${QWEN_TEXT_PORT:-8001}"
 QWEN_VL_PORT="${QWEN_VL_PORT:-8002}"
+LLM_PROVIDER="${LLM_PROVIDER:-local}"
 
 # ── Phase 0 & 1: Preflight — env bootstrap + vLLM binary + model cache ────────
-log "Running preflight checks..."
-bash "$SCRIPTS_DIR/vllm_preflight.sh"
+if [[ "$LLM_PROVIDER" == "local" ]]; then
+    log "Running preflight checks..."
+    bash "$SCRIPTS_DIR/vllm_preflight.sh"
 
-# Re-source .env after preflight (it may have just been created with VLLM_VENV)
-set -a
-source "$PROJECT_ROOT/.env"
-set +a
+    # Re-source .env after preflight (it may have just been created with VLLM_VENV)
+    set -a
+    source "$PROJECT_ROOT/.env"
+    set +a
+else
+    log "LLM_PROVIDER=${LLM_PROVIDER} — skipping vLLM preflight."
+fi
 QWEN_TEXT_PORT="${QWEN_TEXT_PORT:-8001}"
 QWEN_VL_PORT="${QWEN_VL_PORT:-8002}"
 READY_TIMEOUT="${READY_TIMEOUT:-900}"
@@ -52,7 +57,9 @@ READY_TIMEOUT="${READY_TIMEOUT:-900}"
 port_listening() { ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN; }
 
 VLLM_SERVERS_WERE_RUNNING=0
-if port_listening "$QWEN_TEXT_PORT" && port_listening "$QWEN_VL_PORT"; then
+if [[ "$LLM_PROVIDER" != "local" ]]; then
+    log "LLM_PROVIDER=${LLM_PROVIDER} — skipping vLLM servers."
+elif port_listening "$QWEN_TEXT_PORT" && port_listening "$QWEN_VL_PORT"; then
     log "vLLM servers already running on :${QWEN_TEXT_PORT} (qwen-text) and :${QWEN_VL_PORT} (qwen-vl) — reusing."
     VLLM_SERVERS_WERE_RUNNING=1
 else
@@ -91,6 +98,10 @@ cleanup() {
         -f "$PROJECT_ROOT/docker-compose.infra.yml" \
         -f "$PROJECT_ROOT/docker-compose.yml" \
         down 2>/dev/null || true
+
+    if [[ "$LLM_PROVIDER" != "local" ]]; then
+        return
+    fi
 
     if [[ $VLLM_SERVERS_WERE_RUNNING -eq 1 ]]; then
         log "vLLM servers were already running before this session — leaving them up."
