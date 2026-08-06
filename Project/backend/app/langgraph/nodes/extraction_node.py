@@ -13,12 +13,11 @@ which uses JSON schema / function-calling under the hood.
 
 from __future__ import annotations
 
-import json
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.langgraph.llm import get_llm
+from app.langgraph.llm import get_structured_llm
 from app.langgraph.schemas.node_schemas import (
     ExtractionNodeInput,
     ExtractionNodeOutput,
@@ -102,38 +101,17 @@ def extraction_node(state: GraphState) -> GraphState:
         return {**state, "errors": errors, "current_step": "extraction_node"}  # type: ignore[return-value]
 
     # --- LLM call -----------------------------------------------------------
-    llm = get_llm(temperature=0.0)
+    llm = get_structured_llm(ExtractionNodeOutput, temperature=0.0)
     prompt_messages = [
         SystemMessage(content=_SYSTEM_PROMPT),
         HumanMessage(content=_build_prompt(node_input.doc_type, node_input.ocr_text)),
     ]
 
-    raw_response = ""
     try:
-        response = llm.invoke(prompt_messages)
-        raw_response = str(response.content)
-        parsed_list: list[dict] = json.loads(raw_response)
-        if not isinstance(parsed_list, list):
-            raise ValueError("Expected a JSON array from the LLM")
-    except (json.JSONDecodeError, ValueError) as exc:
-        errors.append(f"extraction_node: LLM returned invalid JSON: {exc} — {raw_response[:200]}")
-        return {**state, "errors": errors, "current_step": "extraction_node"}  # type: ignore[return-value]
+        node_output: ExtractionNodeOutput = llm.invoke(prompt_messages)  # type: ignore[assignment]
     except Exception as exc:
         errors.append(f"extraction_node: LLM call failed: {exc}")
         return {**state, "errors": errors, "current_step": "extraction_node"}  # type: ignore[return-value]
-
-    # --- Validate output via Pydantic ----------------------------------------
-    extracted: list[ExtractedField] = []
-    for item in parsed_list:
-        try:
-            extracted.append(ExtractedField(**item))
-        except Exception as exc:
-            errors.append(f"extraction_node: skipping malformed field {item}: {exc}")
-
-    node_output = ExtractionNodeOutput(
-        extracted_fields=extracted,
-        raw_llm_response=raw_response,
-    )
 
     # Flatten to dict for the shared state
     fields_dict = {
@@ -147,7 +125,6 @@ def extraction_node(state: GraphState) -> GraphState:
     return {  # type: ignore[return-value]
         **state,
         "extracted_fields": fields_dict,
-        "messages": [response],  # add_messages reducer will append
         "errors": errors,
         "current_step": "extraction_node",
     }

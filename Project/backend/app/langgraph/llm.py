@@ -13,9 +13,12 @@ Provider: ``bedrock``
     (env vars AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN,
     ~/.aws/credentials, IAM instance role, etc.).
 
-Two factories are provided:
-  get_llm()        – text-only model (classification, extraction, report generation)
-  get_vision_llm() – vision/multimodal model (image + text input)
+Factories are cached via ``@lru_cache`` so identical parameter combinations
+return the same client instance across the entire application lifecycle.
+
+  get_llm()            – cached text-only model
+  get_vision_llm()     – cached vision/multimodal model
+  get_structured_llm() – cached structured-output runnable (schema-bound)
 
 All settings are pulled from app.core.config.settings so they are unified
 under the same .env file.
@@ -23,10 +26,20 @@ under the same .env file.
 
 from __future__ import annotations
 
+from functools import lru_cache
+from typing import Type
+
 from langchain_core.language_models import BaseChatModel
+from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from app.core.config import settings
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Public text LLM factory (keyword-only interface → delegates to cached impl)
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def get_llm(
@@ -35,7 +48,16 @@ def get_llm(
     max_tokens: int | None = None,
     streaming: bool = False,
 ) -> BaseChatModel:
-    """Return a chat model for text tasks, dispatched by LLM_PROVIDER."""
+    """Return a cached chat model for text tasks, dispatched by LLM_PROVIDER."""
+    return _get_llm_cached(temperature, max_tokens, streaming)
+
+
+@lru_cache(maxsize=8)
+def _get_llm_cached(
+    temperature: float | None,
+    max_tokens: int | None,
+    streaming: bool,
+) -> BaseChatModel:
     _temp = temperature if temperature is not None else settings.VLLM_TEMPERATURE
     _max_tokens = max_tokens if max_tokens is not None else settings.VLLM_MAX_TOKENS
 
@@ -64,17 +86,31 @@ def get_llm(
     )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Public vision LLM factory
+# ──────────────────────────────────────────────────────────────────────────────
+
+
 def get_vision_llm(
     *,
     temperature: float | None = None,
     max_tokens: int | None = None,
     streaming: bool = False,
 ) -> BaseChatModel:
-    """Return a chat model for vision/multimodal tasks, dispatched by LLM_PROVIDER.
+    """Return a cached chat model for vision/multimodal tasks, dispatched by LLM_PROVIDER.
 
     Both providers accept messages with image_url content parts encoded as
     base64 data URIs — use ``encode_image_for_llm()`` to produce them.
     """
+    return _get_vision_llm_cached(temperature, max_tokens, streaming)
+
+
+@lru_cache(maxsize=8)
+def _get_vision_llm_cached(
+    temperature: float | None,
+    max_tokens: int | None,
+    streaming: bool,
+) -> BaseChatModel:
     _temp = temperature if temperature is not None else settings.VLLM_TEMPERATURE
     _max_tokens = max_tokens if max_tokens is not None else settings.VLLM_MAX_TOKENS
 
@@ -98,6 +134,50 @@ def get_vision_llm(
         streaming=streaming,
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Structured output factory (cached per schema + LLM config)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def get_structured_llm(
+    schema: Type[BaseModel],
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    vision: bool = False,
+) -> Runnable:
+    """Return a cached structured-output runnable bound to the given Pydantic schema.
+
+    Usage::
+
+        llm = get_structured_llm(MySchema, temperature=0.0)
+        result: MySchema = llm.invoke([message])
+
+    The same (schema, temperature, max_tokens, vision) combination always
+    returns the identical Runnable instance.
+    """
+    return _get_structured_llm_cached(schema, temperature, max_tokens, vision)
+
+
+@lru_cache(maxsize=16)
+def _get_structured_llm_cached(
+    schema: Type[BaseModel],
+    temperature: float | None,
+    max_tokens: int | None,
+    is_vision: bool,
+) -> Runnable:
+    if is_vision:
+        base = get_vision_llm(temperature=temperature, max_tokens=max_tokens)
+    else:
+        base = get_llm(temperature=temperature, max_tokens=max_tokens)
+    return base.with_structured_output(schema)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Utility
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def encode_image_for_llm(image_bytes: bytes, mime_type: str = "image/jpeg") -> str:

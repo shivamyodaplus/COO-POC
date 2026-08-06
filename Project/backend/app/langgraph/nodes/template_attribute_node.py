@@ -14,7 +14,7 @@ import logging
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
-from app.langgraph.llm import encode_image_for_llm, get_vision_llm
+from app.langgraph.llm import encode_image_for_llm, get_structured_llm
 from app.langgraph.schemas.coo_pacd_schemas import (
     TemplateAttributeInput,
     TemplateAttributeOutput,
@@ -82,8 +82,7 @@ def template_attribute_node(state: GraphState) -> GraphState:
 
     # with_structured_output uses tool-calling to guarantee valid JSON that
     # matches _AttributeMap — no markdown fences, no truncation surprises.
-    llm = get_vision_llm(temperature=0.0)
-    structured_llm = llm.with_structured_output(_AttributeMap)
+    structured_llm = get_structured_llm(_AttributeMap, temperature=0.0, vision=True)
     message = HumanMessage(
         content=[
             {"type": "text", "text": _SYSTEM_PROMPT},

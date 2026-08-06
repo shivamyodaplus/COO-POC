@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 from langchain_core.messages import HumanMessage
+from pydantic import BaseModel, Field
 
-from app.langgraph.llm import encode_image_for_llm, get_vision_llm
+from app.langgraph.llm import encode_image_for_llm, get_structured_llm
 from app.langgraph.schemas.coo_pacd_schemas import (
     TemplateConfirmationInput,
     TemplateConfirmationOutput,
@@ -29,6 +29,18 @@ from app.services.postgres_service import get_adapter
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class _SingleMatchResult(BaseModel):
+    """Structured output for single-template confirmation."""
+    is_match: bool = Field(..., description="Whether the COO matches this template.")
+    reasoning: str = Field("", description="Brief explanation.")
+
+
+class _BatchMatchResult(BaseModel):
+    """Structured output for batch template confirmation."""
+    confirmed_template_id: str | None = Field(None, description="Matched template ID or null.")
+    reasoning: str = Field("", description="Brief explanation.")
 
 _SYSTEM_PROMPT = """\
 You are a document authentication expert.
@@ -107,7 +119,8 @@ def template_confirmation_node(state: GraphState) -> GraphState:
         return {**state, "errors": errors, "current_step": "template_confirmation_node"}  # type: ignore[return-value]
 
     adapter = get_adapter()
-    llm = get_vision_llm(temperature=0.0)
+    single_llm = get_structured_llm(_SingleMatchResult, temperature=0.0, vision=True)
+    batch_llm = get_structured_llm(_BatchMatchResult, temperature=0.0, vision=True)
     batch_size = max(1, settings.COO_TEMPLATE_CONFIRM_BATCH)
 
     confirmed_template_id: str | None = None
@@ -158,19 +171,12 @@ def template_confirmation_node(state: GraphState) -> GraphState:
             ]
 
             try:
-                response = llm.invoke([HumanMessage(content=content_parts)])
-                raw = str(response.content).strip()
-                if "<think>" in raw:
-                    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-                if raw.startswith("```"):
-                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                parsed = json.loads(raw)
-                is_match = bool(parsed.get("is_match", False))
+                result: _SingleMatchResult = single_llm.invoke([HumanMessage(content=content_parts)])  # type: ignore[assignment]
                 logger.info(
                     "template_confirmation_node: id=%s is_match=%s — %s",
-                    template_id, is_match, parsed.get("reasoning", ""),
+                    template_id, result.is_match, result.reasoning,
                 )
-                if is_match:
+                if result.is_match:
                     confirmed_template_id = template_id
                     confirmed_template_name = template_name
                     break
@@ -196,17 +202,11 @@ def template_confirmation_node(state: GraphState) -> GraphState:
                 id_to_candidate[t_id] = candidate
 
             try:
-                response = llm.invoke([HumanMessage(content=content_parts)])
-                raw = str(response.content).strip()
-                if "<think>" in raw:
-                    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-                if raw.startswith("```"):
-                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                parsed = json.loads(raw)
-                matched_id: str | None = parsed.get("confirmed_template_id") or None
+                result: _BatchMatchResult = batch_llm.invoke([HumanMessage(content=content_parts)])  # type: ignore[assignment]
+                matched_id: str | None = result.confirmed_template_id or None
                 logger.info(
                     "template_confirmation_node: batch %d confirmed_template_id=%s — %s",
-                    batch_num, matched_id, parsed.get("reasoning", ""),
+                    batch_num, matched_id, result.reasoning,
                 )
                 if matched_id and matched_id in id_to_candidate:
                     confirmed_template_id = matched_id

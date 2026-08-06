@@ -13,12 +13,11 @@ The node expects OCR text to already be present in ``state["messages"]``
 
 from __future__ import annotations
 
-import json
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.langgraph.llm import get_llm
+from app.langgraph.llm import get_structured_llm
 from app.langgraph.schemas.node_schemas import (
     ClassificationNodeInput,
     ClassificationNodeOutput,
@@ -90,28 +89,16 @@ def classification_node(state: GraphState) -> GraphState:
         return {**state, "errors": errors, "current_step": "classification_node"}  # type: ignore[return-value]
 
     # --- LLM call -----------------------------------------------------------
-    llm = get_llm(temperature=0.0)
+    llm = get_structured_llm(ClassificationNodeOutput, temperature=0.0)
     prompt_messages = [
         SystemMessage(content=_SYSTEM_PROMPT),
         HumanMessage(content=_build_prompt(node_input.ocr_text, node_input.country_hint)),
     ]
 
     try:
-        response = llm.invoke(prompt_messages)
-        raw_response = str(response.content)
-        parsed = json.loads(raw_response)
-    except json.JSONDecodeError:
-        errors.append(f"classification_node: LLM returned non-JSON: {raw_response[:200]}")
-        return {**state, "errors": errors, "current_step": "classification_node"}  # type: ignore[return-value]
+        node_output: ClassificationNodeOutput = llm.invoke(prompt_messages)  # type: ignore[assignment]
     except Exception as exc:
         errors.append(f"classification_node: LLM call failed: {exc}")
-        return {**state, "errors": errors, "current_step": "classification_node"}  # type: ignore[return-value]
-
-    # --- Validate output via Pydantic ----------------------------------------
-    try:
-        node_output = ClassificationNodeOutput(**parsed)
-    except Exception as exc:
-        errors.append(f"classification_node output schema error: {exc}")
         return {**state, "errors": errors, "current_step": "classification_node"}  # type: ignore[return-value]
 
     logger.info(
@@ -125,7 +112,6 @@ def classification_node(state: GraphState) -> GraphState:
         **state,
         "country": node_output.country,
         "doc_type": node_output.doc_type,
-        "messages": [response],  # add_messages reducer will append
         "errors": errors,
         "current_step": "classification_node",
     }

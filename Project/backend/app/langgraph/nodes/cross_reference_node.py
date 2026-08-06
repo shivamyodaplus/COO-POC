@@ -16,16 +16,15 @@ approach so the pipeline never blocks on an LLM outage.
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
 
 from app.core.config import settings
-from app.langgraph.llm import get_llm
+from app.langgraph.llm import get_structured_llm
 from app.langgraph.schemas.coo_pacd_schemas import (
     CrossReferenceInput,
     CrossReferenceOutput,
@@ -62,6 +61,21 @@ Rules:
 - "not_found_in_pacd": no relevant evidence in the provided chunks.
 - Every COO field must appear in the output exactly once.
 """
+
+
+class _CrossRefItem(BaseModel):
+    """Single field verdict from the cross-reference LLM."""
+    field_key: str
+    coo_value: str
+    pacd_value: str | None = None
+    verdict: str = Field(..., description="match|mismatch|not_found_in_pacd")
+    pacd_source_doc: str | None = None
+    pacd_source_page: int | None = None
+
+
+class _CrossRefResult(BaseModel):
+    """Structured output for the cross-reference validation."""
+    items: list[_CrossRefItem]
 
 
 def _normalise(value: str) -> str:
@@ -101,7 +115,6 @@ def _llm_validate(
 ) -> list[dict[str, Any]]:
     """Call the text LLM to produce a structured verdict for all fields."""
     # Short-circuit: no PACD evidence — mark everything not_found without an LLM call.
-    # Avoids the empty-response crash when the model is sent a no-context prompt.
     if not unique_chunks:
         return [
             {
@@ -130,31 +143,9 @@ def _llm_validate(
         f"COO Document Fields:\n{fields_block}"
     )
 
-    llm = get_llm()
-    response = llm.invoke([SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=user_msg)])
-    raw = (response.content if hasattr(response, "content") else str(response) or "").strip()
-
-    if not raw:
-        raise ValueError("LLM returned an empty response")
-
-    # 1. Strip Qwen3 thinking blocks (<think>…</think>)
-    if "<think>" in raw:
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-
-    # 2. Strip markdown fences (```json … ``` or ``` … ```)
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-    # 3. If the model added prose before/after the JSON array, extract it.
-    if not raw.startswith("["):
-        m = re.search(r"\[.*\]", raw, flags=re.DOTALL)
-        if m:
-            raw = m.group(0).strip()
-
-    if not raw:
-        raise ValueError("LLM returned only a thinking block with no JSON output")
-
-    return json.loads(raw)
+    llm = get_structured_llm(_CrossRefResult, temperature=0.0)
+    result: _CrossRefResult = llm.invoke([SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=user_msg)])  # type: ignore[assignment]
+    return [item.model_dump() for item in result.items]
 
 
 def cross_reference_node(state: GraphState) -> GraphState:
