@@ -49,7 +49,10 @@ def _after_ingestion(state: GraphState) -> str:
 
 def _after_retrieval(state: GraphState) -> str:
     if not state.get("retrieved_templates"):
-        return "report_generation_node"  # will produce INCONCLUSIVE with no template
+        # No templates found — skip confirmation and use general extraction mode.
+        # Still runs coo_extraction_node + cross_reference_node so PACD data
+        # is always compared regardless of template availability.
+        return "coo_extraction_node"
     return "template_confirmation_node"
 
 
@@ -79,7 +82,7 @@ def build_coo_verification_workflow() -> CompiledStateGraph:
         _after_retrieval,
         {
             "template_confirmation_node": "template_confirmation_node",
-            "report_generation_node": "report_generation_node",
+            "coo_extraction_node": "coo_extraction_node",
         },
     )
     graph.add_conditional_edges(

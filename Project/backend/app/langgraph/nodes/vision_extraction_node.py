@@ -66,7 +66,7 @@ Examine the document image and respond ONLY with a single JSON object — no exp
 
 JSON shape:
 {
-  "doc_type": "commercial_invoice" | "packing_list" | "bill_of_lading" | "certificate_of_origin" | "insurance_certificate" | "contract" | "other" | null,
+  "doc_type": "<one of: commercial_invoice, packing_list, bill_of_lading, certificate_of_origin, insurance_certificate, contract, other — or null if continuation page>",
   "is_continuation": false,
   "header_fields": {"snake_case_key": "value"},
   "line_items": [
@@ -137,12 +137,15 @@ def _parse_raw_json(raw: str, page_num: int) -> PageStructuredExtraction | None:
             except Exception:
                 logger.debug("_parse_raw_json p%d: skipping malformed item %d", page_num, i)
 
+        raw_headers = data.get("header_fields") or {}
+        if not isinstance(raw_headers, dict):
+            raw_headers = {}
         return PageStructuredExtraction(
             doc_type=data.get("doc_type") or None,
             is_continuation=bool(data.get("is_continuation", False)),
             header_fields={
                 str(k): str(v)
-                for k, v in (data.get("header_fields") or {}).items()
+                for k, v in raw_headers.items()
                 if v is not None and v != ""
             },
             line_items=items,
