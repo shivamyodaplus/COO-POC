@@ -34,7 +34,9 @@ Extract:
 
 Rules:
 - Use snake_case for header field keys.
-- If a field is not visible, omit it entirely (do not set null).
+- If a field is not visible or blank, omit it entirely (do not set null).
+- CRITICAL: If a field contains only its own label/placeholder text (e.g. "Importing country",
+  "Insert name here", "N/A", "...") rather than an actual filled-in value, omit it entirely.
 - Each distinct product with its own line/row should be a separate line_item entry.
 - If items are numbered on the document, preserve the item_number.
 """
@@ -53,7 +55,9 @@ Extract:
    hs_code, description, quantity, unit, value, weight, origin_country (only include what's present).
 
 Rules:
-- If a field is not visible, omit it entirely.
+- If a field is not visible or blank, omit it entirely.
+- CRITICAL: If a field contains only its own label/placeholder text (e.g. "Importing country",
+  "Insert name here", "N/A", "...") rather than an actual filled-in value, omit it entirely.
 - Each distinct product should be a separate line_item entry.
 - If items are numbered on the document, preserve the item_number.
 """

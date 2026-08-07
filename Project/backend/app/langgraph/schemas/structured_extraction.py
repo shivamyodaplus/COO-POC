@@ -222,3 +222,143 @@ class PACDStructuringOutput(_Base):
     documents_created: int = 0
     line_items_created: int = 0
     errors: list[str] = Field(default_factory=list)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Section-Based COO Verification — query generation + parallel verification
+# ──────────────────────────────────────────────────────────────────────────────
+
+class SectionQueries(_Base):
+    """Retrieval queries generated from COO data for each PACD chunk section.
+
+    Used as ``with_structured_output(SectionQueries)`` target for the
+    query-generation LLM call before parallel verification.
+    """
+    header_queries: list[str] = Field(
+        ...,
+        description=(
+            "3-5 concise search queries to retrieve PACD header chunks. "
+            "Cover: exporter, consignee, invoice number, date, ports, country of origin."
+        ),
+    )
+    content_queries: list[str] = Field(
+        ...,
+        description=(
+            "3-5 concise search queries to retrieve PACD table/item chunks. "
+            "Cover: HS codes, product descriptions, quantities, origin country."
+        ),
+    )
+    footer_queries: list[str] = Field(
+        ...,
+        description=(
+            "2-3 concise search queries to retrieve PACD footer chunks. "
+            "Cover: totals, payment terms, remarks, bank details, authorized signatures."
+        ),
+    )
+
+
+class FooterFieldVerdict(_Base):
+    """Verification verdict for a single footer-level field."""
+    field_key: str = Field(..., description="The footer field name being verified")
+    coo_value: str = Field(..., description="Value from the COO document")
+    pacd_value: str | None = Field(None, description="Matching value found in PACD, or null")
+    verdict: Literal["match", "mismatch", "not_found_in_pacd"] = Field(
+        ..., description="match: values agree; mismatch: values differ; not_found_in_pacd: no evidence"
+    )
+    pacd_source_doc: str | None = Field(None, description="PACD document type where value was found")
+
+
+class FooterVerificationResult(_Base):
+    """Structured output for footer-level cross-reference verification.
+
+    Used as ``with_structured_output(FooterVerificationResult)`` target.
+    """
+    verdicts: list[FooterFieldVerdict] = Field(
+        ...,
+        description="One verdict per COO footer field. Every footer field must appear exactly once.",
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Map-Reduce RAG Pipeline — query expansion + LLM critic schemas
+# ──────────────────────────────────────────────────────────────────────────────
+
+class MultiQueryExpansion(_Base):
+    """Multi-query expansion output for Map-Reduce RAG retrieval.
+
+    Used as ``with_structured_output(MultiQueryExpansion)`` target in
+    ``multi_query_expansion_node`` to generate targeted Milvus searches.
+    """
+    item_queries: list[str] = Field(
+        ...,
+        description=(
+            "3-8 search queries for retrieving PACD table chunks that match the COO's "
+            "line items. Include product names, synonyms, and HS code prefixes. "
+            "Example: ['Stainless Steel Bolts', '7318.15', 'M8 Bolts fasteners']"
+        ),
+    )
+    header_queries: list[str] = Field(
+        ...,
+        description=(
+            "3-5 search queries for retrieving PACD header chunks. "
+            "Cover: exporter/consignee names, invoice number, certificate number, date, ports. "
+            "Use exact values from the COO (company names, reference numbers)."
+        ),
+    )
+    footer_queries: list[str] = Field(
+        ...,
+        description=(
+            "2-4 search queries for retrieving PACD footer chunks. "
+            "Cover: total gross weight, total net weight, total value, payment terms. "
+            "Use exact numeric values if present (e.g. 'total weight 500 KG')."
+        ),
+    )
+    hs_queries: list[str] = Field(
+        ...,
+        description=(
+            "All unique HS codes found in the COO line items, exactly as written. "
+            "Example: ['7318.15', '8471.30']. Used for deterministic table-chunk matching."
+        ),
+    )
+
+
+class CriticOutput(_Base):
+    """Structured output from the single LLM Critic node.
+
+    The LLM populates this from the condensed reference context.  The node
+    then computes counts and assembles the final ``VerificationReport``.
+    """
+    discrepancy_table: list["DiscrepancyRow"] = Field(
+        ...,
+        description=(
+            "One entry per COO field or line-item field verified against the PACD context. "
+            "Cover every header field and every item field (hs_code, description, quantity, "
+            "weight, value) for every COO line item."
+        ),
+    )
+    summary: str = Field(..., description="2-3 sentence executive summary of the verification.")
+    narrative: str = Field(
+        ...,
+        description=(
+            "3-5 paragraph narrative describing findings, discrepancies, "
+            "context gaps, and recommended follow-up actions."
+        ),
+    )
+    overall_verdict: str = Field(
+        ...,
+        description="'PASS' if all verified fields match, 'FAIL' if any mismatch, 'INCONCLUSIVE' if evidence is insufficient.",
+    )
+
+
+class DiscrepancyRow(_Base):
+    """A single field comparison row produced by the LLM critic."""
+    field_key: str = Field(..., description="Field name, e.g. 'exporter_name' or 'item_1_hs_code'")
+    coo_value: str | None = Field(None, description="Value from the COO document")
+    pacd_value: str | None = Field(None, description="Matching value found in a PACD document")
+    verdict: str = Field(
+        ...,
+        description="One of: 'match', 'mismatch', 'not_found_in_pacd'",
+    )
+    pacd_source_doc: str | None = Field(
+        None, description="Document type where the PACD value was found (e.g. 'commercial_invoice')"
+    )

@@ -69,6 +69,19 @@ class GraphState(TypedDict):
     cross_reference_details: dict[str, Any]    # full structured results (headers + items)
     verification_report: dict[str, Any]        # final report {table, narrative, summary}
 
+    # Section-based parallel verification (old pipeline — kept for compatibility)
+    section_queries: dict[str, Any]                    # {"header": [...], "content": [...], "footer": [...]}
+    header_verification_results: list[dict[str, Any]]  # verdicts from header_verification_node
+    content_verification_results: list[dict[str, Any]] # verdicts from content_verification_node
+    footer_verification_results: list[dict[str, Any]]  # verdicts from footer_verification_node
+
+    # ------------------------------------------------------------------ #
+    # Map-Reduce RAG pipeline (new COO verification flow)                  #
+    # ------------------------------------------------------------------ #
+    multi_queries: dict[str, Any]                # {"item_queries": [], "header_queries": [], ...}
+    retrieved_chunks: list[dict[str, Any]]       # chunks from rag_retrieval_node
+    assembled_context: str | None                # formatted XML context for llm_critic_node
+
     # ------------------------------------------------------------------ #
     # Control flow                                                         #
     # ------------------------------------------------------------------ #

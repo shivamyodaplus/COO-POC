@@ -235,7 +235,7 @@ def _pass2_match_items(
                     transaction_id=transaction_id,
                     dense_vec=dense_vecs[0],
                     sparse_vec=sparse_vecs[0],
-                    top_k=3,
+                    top_k=10,
                 )
                 if hits:
                     # Load full item data from Postgres

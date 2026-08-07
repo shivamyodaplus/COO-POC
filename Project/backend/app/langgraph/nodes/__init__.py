@@ -5,6 +5,11 @@ from app.langgraph.nodes.extraction_node import extraction_node
 from app.langgraph.nodes.vision_extraction_node import vision_extraction_node
 from app.langgraph.nodes.pacd_indexing_node import pacd_indexing_node
 from app.langgraph.nodes.pacd_structuring_node import pacd_structuring_node
+from app.langgraph.nodes.pacd_layout_chunking_node import pacd_layout_chunking_node
+from app.langgraph.nodes.multi_query_expansion_node import multi_query_expansion_node
+from app.langgraph.nodes.rag_retrieval_node import rag_retrieval_node
+from app.langgraph.nodes.context_assembly_node import context_assembly_node
+from app.langgraph.nodes.llm_critic_node import llm_critic_node
 from app.langgraph.nodes.template_attribute_node import template_attribute_node
 from app.langgraph.nodes.template_retrieval_node import template_retrieval_node
 from app.langgraph.nodes.template_confirmation_node import template_confirmation_node

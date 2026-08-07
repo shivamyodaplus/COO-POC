@@ -12,12 +12,15 @@ Algorithm
    - A page with doc_type set and is_continuation=False → new document starts.
    - A page with is_continuation=True → append to previous document.
 3. Store each logical document in PostgreSQL (pacd_documents + pacd_line_items).
-4. Embed line item descriptions into Milvus for fuzzy fallback search.
+4. Generate 3 semantic chunks per document (header / table / footer) and index
+   them in the pacd_chunks Milvus collection for parallel section verification.
+5. Embed line item descriptions into pacd_items for legacy HS-code fallback search.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from app.core.config import settings
@@ -101,6 +104,169 @@ def _merge_pages_into_documents(
         documents.append(current_doc)
 
     return documents
+
+
+# Keywords that identify footer-level fields in header_fields
+_FOOTER_KEYWORDS = frozenset({
+    "total_", "remark", "term", "signature", "payment", "bank",
+    "seal", "stamp", "authorized", "note", "comment", "condition",
+    "balance", "due", "freight", "insurance", "grand",
+})
+
+
+def _is_footer_field(key: str) -> bool:
+    k = key.lower()
+    return any(k.startswith(kw) or kw in k for kw in _FOOTER_KEYWORDS)
+
+
+def _build_chunk_records(
+    logical_docs: list[LogicalDocument],
+    transaction_id: str,
+    document_id: str,
+) -> list[dict]:
+    """Build header / table / footer chunk records for every logical document.
+
+    Returns a list of dicts ready for embedding (without dense/sparse vectors).
+    Each record: id, transaction_id, document_id, doc_type,
+                 chunk_type, chunk_text, chunk_metadata.
+    """
+    import json
+
+    records: list[dict] = []
+
+    for doc in logical_docs:
+        doc_id_slug = f"{document_id}_{doc.doc_type}"
+
+        # ── Header chunk ──────────────────────────────────────────────────
+        header_fields = {k: v for k, v in doc.header_fields.items() if not _is_footer_field(k) and v}
+        if header_fields:
+            header_text = f"[{doc.doc_type}] " + " | ".join(
+                f"{k}: {v}" for k, v in header_fields.items()
+            )
+            records.append({
+                "id":             f"{doc_id_slug}_header",
+                "transaction_id": transaction_id,
+                "document_id":    document_id,
+                "doc_type":       doc.doc_type,
+                "chunk_type":     "header",
+                "chunk_text":     header_text[:4096],
+                "chunk_metadata": json.dumps({"header_fields": header_fields, "doc_type": doc.doc_type,
+                                              "filename": doc.filename})[:4096],
+            })
+
+        # ── Table chunk ───────────────────────────────────────────────────
+        if doc.line_items:
+            lines: list[str] = []
+            for li in doc.line_items:
+                parts: list[str] = []
+                if li.item_number:    parts.append(f"Item {li.item_number}")
+                if li.hs_code:        parts.append(f"HS {li.hs_code}")
+                if li.description:    parts.append(li.description)
+                if li.quantity:       parts.append(f"qty: {li.quantity}")
+                if li.unit:           parts.append(li.unit)
+                if li.unit_price:     parts.append(f"price: {li.unit_price}")
+                if li.total_value:    parts.append(f"total: {li.total_value}")
+                if li.weight:         parts.append(f"weight: {li.weight}")
+                if li.origin_country: parts.append(f"origin: {li.origin_country}")
+                lines.append(" | ".join(parts))
+            table_text = f"[{doc.doc_type} items]\n" + "\n".join(lines)
+            items_meta = [
+                {
+                    "item_number":    li.item_number,
+                    "hs_code":        li.hs_code,
+                    "description":    li.description,
+                    "quantity":       li.quantity,
+                    "unit":           li.unit,
+                    "unit_price":     li.unit_price,
+                    "total_value":    li.total_value,
+                    "weight":         li.weight,
+                    "origin_country": li.origin_country,
+                }
+                for li in doc.line_items
+            ]
+            records.append({
+                "id":             f"{doc_id_slug}_table",
+                "transaction_id": transaction_id,
+                "document_id":    document_id,
+                "doc_type":       doc.doc_type,
+                "chunk_type":     "table",
+                "chunk_text":     table_text[:4096],
+                "chunk_metadata": json.dumps({"line_items": items_meta, "doc_type": doc.doc_type,
+                                              "filename": doc.filename})[:4096],
+            })
+
+        # ── Footer chunk ──────────────────────────────────────────────────
+        footer_fields = {k: v for k, v in doc.header_fields.items() if _is_footer_field(k) and v}
+        if footer_fields:
+            footer_text = f"[{doc.doc_type} footer] " + " | ".join(
+                f"{k}: {v}" for k, v in footer_fields.items()
+            )
+            records.append({
+                "id":             f"{doc_id_slug}_footer",
+                "transaction_id": transaction_id,
+                "document_id":    document_id,
+                "doc_type":       doc.doc_type,
+                "chunk_type":     "footer",
+                "chunk_text":     footer_text[:4096],
+                "chunk_metadata": json.dumps({"footer_fields": footer_fields, "doc_type": doc.doc_type,
+                                              "filename": doc.filename})[:4096],
+            })
+
+    return records
+
+
+# ── Embedding helpers ─────────────────────────────────────────────────────────
+
+_MIN_EMBED_LEN = 20  # texts shorter than this reliably produce NaN in BGE-M3 fp16
+
+
+def _sanitize_embed_text(text: str) -> str:
+    """Return a safe embedding input, padding short texts to _MIN_EMBED_LEN."""
+    text = text.strip()
+    if len(text) < _MIN_EMBED_LEN:
+        text = text.ljust(_MIN_EMBED_LEN)
+    return text
+
+
+def _is_valid_dense(vec: list[float]) -> bool:
+    """Return True iff every element is finite (no NaN or Inf)."""
+    return all(math.isfinite(v) for v in vec)
+
+
+def _embed_and_filter(
+    records: list[dict],
+    text_key: str,
+) -> list[dict]:
+    """Embed record texts, attach vectors, and drop records with NaN/Inf vectors.
+
+    Modifies records in-place for valid ones; skips and logs invalid ones.
+    Returns the list of valid records ready for Milvus upsert.
+    """
+    if not records:
+        return []
+
+    texts = [_sanitize_embed_text(r[text_key]) for r in records]
+    dense_vecs, sparse_vecs = embed_text_chunks(texts)
+
+    valid: list[dict] = []
+    for i, record in enumerate(records):
+        dv = dense_vecs[i]
+        if not _is_valid_dense(dv):
+            logger.warning(
+                "pacd_structuring_node: skipping record '%s' — NaN/Inf in dense embedding "
+                "(text=%r)", record.get("id"), texts[i][:80],
+            )
+            continue
+        record["dense"] = dv
+        record["sparse"] = sparse_vecs[i]
+        valid.append(record)
+
+    if len(valid) < len(records):
+        logger.info(
+            "pacd_structuring_node: %d/%d records had valid embeddings",
+            len(valid), len(records),
+        )
+    return valid
 
 
 def pacd_structuring_node(state: GraphState) -> GraphState:
@@ -199,22 +365,35 @@ def pacd_structuring_node(state: GraphState) -> GraphState:
         len(logical_docs), total_items_created,
     )
 
-    # ── Step 3: Embed and index line item descriptions in Milvus ──────────────
+    # ── Step 3: Generate semantic chunks and index in Milvus ──────────────────
+    # 3a: line-item description records for legacy HS-code fallback (pacd_items)
     if all_milvus_records:
-        texts = [r["description_text"] for r in all_milvus_records]
         try:
-            dense_vecs, sparse_vecs = embed_text_chunks(texts)
-            for i, record in enumerate(all_milvus_records):
-                record["dense"] = dense_vecs[i]
-                record["sparse"] = sparse_vecs[i]
-            pacd_milvus_service.upsert_item_descriptions(all_milvus_records)
-            logger.info(
-                "pacd_structuring_node: indexed %d item descriptions in Milvus",
-                len(all_milvus_records),
-            )
+            valid_item_records = _embed_and_filter(all_milvus_records, "description_text")
+            if valid_item_records:
+                pacd_milvus_service.upsert_item_descriptions(valid_item_records)
+                logger.info(
+                    "pacd_structuring_node: indexed %d item descriptions in pacd_items",
+                    len(valid_item_records),
+                )
         except Exception as exc:
-            errors.append(f"pacd_structuring_node: Milvus indexing failed — {exc}")
-            logger.warning("pacd_structuring_node: Milvus error: %s", exc)
+            errors.append(f"pacd_structuring_node: pacd_items Milvus indexing failed — {exc}")
+            logger.warning("pacd_structuring_node: pacd_items Milvus error: %s", exc)
+
+    # 3b: semantic section chunks (header / table / footer) → pacd_chunks
+    chunk_records = _build_chunk_records(logical_docs, transaction_id, document_id)
+    if chunk_records:
+        try:
+            valid_chunk_records = _embed_and_filter(chunk_records, "chunk_text")
+            if valid_chunk_records:
+                pacd_milvus_service.upsert_chunks(valid_chunk_records)
+                logger.info(
+                    "pacd_structuring_node: indexed %d/%d section chunks in pacd_chunks",
+                    len(valid_chunk_records), len(chunk_records),
+                )
+        except Exception as exc:
+            errors.append(f"pacd_structuring_node: pacd_chunks Milvus indexing failed — {exc}")
+            logger.warning("pacd_structuring_node: pacd_chunks Milvus error: %s", exc)
 
     # Also persist page images to documents table for audit
     page_images: list[bytes] = state.get("page_images") or []

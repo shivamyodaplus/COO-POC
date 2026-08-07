@@ -62,7 +62,8 @@ class Settings(BaseSettings):
     # Bedrock Converse requires an explicit maxTokens; None is rejected or
     # defaults to the model maximum, which combined with a large prompt can
     # exceed the total context window.  Override via BEDROCK_MAX_TOKENS in .env.
-    BEDROCK_MAX_TOKENS: int = 120000
+    # BEDROCK_MAX_TOKENS: int = 120000
+    BEDROCK_MAX_TOKENS: int = 30000
 
     # BGE-M3 text embedding (PACD / COO cross-reference)
     BGE_M3_MODEL: str = "BAAI/bge-m3"
@@ -83,6 +84,19 @@ class Settings(BaseSettings):
 
     # COO cross-reference: Milvus hits fetched per field query
     CROSS_REF_TOP_K: int = 3
+
+    # ── Map-Reduce RAG pipeline (new COO verification flow) ──────────────────
+    # Name of the new granular PACD chunk collection.
+    PACD_CHUNK_COLLECTION: str = "pacd_document_chunks"
+    # Max line items per table chunk — splits large tables into multiple chunks
+    # so the embedding and LLM context stay manageable (20 items ≈ 4 KB text).
+    MAX_TABLE_ITEMS_PER_CHUNK: int = 20
+    # Milvus ANN candidates fetched per individual query (before RRF fusion).
+    RAG_RETRIEVAL_TOP_K: int = 10
+    # Final unique chunks returned after RRF fusion and deduplication.
+    RAG_FINAL_TOP_K: int = 8
+    # Max sibling table chunks fetched per logical document during table isolation.
+    TABLE_ISOLATION_MAX_CHUNKS: int = 10
 
     # COO template retrieval & confirmation
     # How many candidate templates to fetch from Milvus.

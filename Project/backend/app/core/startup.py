@@ -11,7 +11,12 @@ from app.core.logger import get_logger, setup_logging
 from app.models.embedding import load_model, load_bge_model
 from app.models.ocr import load_ocr
 from app.services.milvus_service import connect, ensure_collection
-from app.services.pacd_milvus_service import connect as pacd_connect, ensure_pacd_collection
+from app.services.pacd_milvus_service import (
+    connect as pacd_connect,
+    ensure_pacd_collection,
+    ensure_pacd_chunks_collection,
+    ensure_pacd_document_chunks_collection,
+)
 from app.utils.template_matching import load_lightglue_models
 from app.services.outbox_worker import run_outbox_worker
 from app.services.postgres_service import close as postgres_close
@@ -35,6 +40,8 @@ async def lifespan(app: FastAPI):
     ensure_collection()
     pacd_connect()
     ensure_pacd_collection()
+    ensure_pacd_chunks_collection()
+    ensure_pacd_document_chunks_collection()
     postgres_connect()
     ensure_schema()
     warm_workflows()

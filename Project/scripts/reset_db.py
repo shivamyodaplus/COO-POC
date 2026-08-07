@@ -77,6 +77,20 @@ def reset_milvus() -> None:
     pacd_milvus_service.ensure_pacd_collection()
     print(f"   ✓ Recreated '{pacd_milvus_service.COLLECTION}'")
 
+    # ── PACD semantic section chunks collection (legacy) ────────────────────
+    if pacd_client.has_collection(pacd_milvus_service.CHUNKS_COLLECTION):
+        pacd_client.drop_collection(pacd_milvus_service.CHUNKS_COLLECTION)
+        print(f"   ✓ Dropped   '{pacd_milvus_service.CHUNKS_COLLECTION}'")
+    pacd_milvus_service.ensure_pacd_chunks_collection()
+    print(f"   ✓ Recreated '{pacd_milvus_service.CHUNKS_COLLECTION}'")
+
+    # ── pacd_document_chunks (Map-Reduce RAG — new primary collection) ───────
+    if pacd_client.has_collection(pacd_milvus_service.DOCUMENT_CHUNKS_COLLECTION):
+        pacd_client.drop_collection(pacd_milvus_service.DOCUMENT_CHUNKS_COLLECTION)
+        print(f"   ✓ Dropped   '{pacd_milvus_service.DOCUMENT_CHUNKS_COLLECTION}'")
+    pacd_milvus_service.ensure_pacd_document_chunks_collection()
+    print(f"   ✓ Recreated '{pacd_milvus_service.DOCUMENT_CHUNKS_COLLECTION}'")
+
 
 if __name__ == "__main__":
     reset_postgres()
