@@ -2,10 +2,12 @@
 VisionExtractionNode — sends a document page image to the Vision LLM and
 extracts structured data from that page.
 
-For PACD documents: Uses ``with_structured_output(PageStructuredExtraction)``
-to directly output header fields + line items per page (no JSON parsing needed).
+For PACD documents: two-stage extraction —
+  1. Vision LLM outputs raw JSON (no tool schema / constrained decoding overhead).
+  2. JSON is parsed locally into PageStructuredExtraction via Pydantic.
+  If parsing fails, a text-only LLM fallback handles structuring.
 
-For COO / template documents: Falls back to general KV extraction (flat pairs).
+For COO / template documents: general KV extraction (flat pairs).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from app.langgraph.schemas.coo_pacd_schemas import (
     VisionExtractionInput,
     VisionExtractionOutput,
 )
-from app.langgraph.schemas.structured_extraction import PageStructuredExtraction
+from app.langgraph.schemas.structured_extraction import LineItem, PageStructuredExtraction
 from app.langgraph.state import GraphState
 
 logger = logging.getLogger(__name__)
@@ -58,41 +60,117 @@ Rules:
 - Do not add extra fields.
 """
 
-_SYSTEM_PROMPT_STRUCTURED_PACD = """\
-You are a precise document data extraction assistant specializing in trade/shipping documents.
+_SYSTEM_PROMPT_PACD_RAW = """\
+You are a trade document data extraction assistant.
+Examine the document image and respond ONLY with a single JSON object — no explanation, no markdown.
 
-Examine the provided document image and extract structured data.
+JSON shape:
+{
+  "doc_type": "commercial_invoice" | "packing_list" | "bill_of_lading" | "certificate_of_origin" | "insurance_certificate" | "contract" | "other" | null,
+  "is_continuation": false,
+  "header_fields": {"snake_case_key": "value"},
+  "line_items": [
+    {"description": "...", "hs_code": "...", "quantity": "...", "unit": "...", "unit_price": "...", "total_value": "...", "weight": "...", "origin_country": "..."}
+  ]
+}
 
-Identify:
-1. **Document type** — what kind of document is this page? (commercial_invoice, packing_list, bill_of_lading, certificate_of_origin, insurance_certificate, contract, other). Set to null if this is a continuation page.
-2. **Is this a continuation?** — True if this page continues a document from the previous page (e.g. more line items, no new header).
-3. **Header fields** — metadata/header information (exporter, consignee, invoice number, date, port, vessel, etc.). Use snake_case keys.
-4. **Line items** — if the page contains a table of products/goods, extract each row as a separate item with: hs_code, description, quantity, unit, unit_price, total_value, weight, origin_country. Only include fields that are actually present.
-
-Important rules:
-- Header fields are document-level metadata (appears once, at the top or in a header area).
-- Line items are repeated/tabular data (products, goods, items in a list or table).
-- If no line items exist (e.g. a bill of lading with no product table), leave line_items empty.
-- If no header is visible (continuation page), set doc_type to null and is_continuation to true.
+Rules:
+- doc_type: set to null if this is a continuation page with no new header.
+- is_continuation: true when this page continues the previous page (more rows, no new header).
+- header_fields: document-level metadata only (exporter, consignee, invoice_number, date, port, vessel …).
+- line_items: one object per product row; omit fields not present in the document.
+- If no line items exist, use an empty array.
 """
 
 
-def _extract_structured_pacd_page(
-    image_bytes: bytes, page_num: int
+def _extract_pacd_page_raw(
+    llm, image_bytes: bytes, page_num: int
 ) -> PageStructuredExtraction | None:
-    """Use with_structured_output to extract structured PACD page data."""
-    llm = get_structured_llm(
-        PageStructuredExtraction, temperature=0.0, vision=True
-    )
+    """Stage 1: call Vision LLM without structured output — returns raw JSON string.
+    Stage 2: parse locally via Pydantic.  Falls back to text LLM if parsing fails.
+    """
     image_b64 = encode_image_for_llm(image_bytes, "image/jpeg")
     message = HumanMessage(
         content=[
-            {"type": "text", "text": _SYSTEM_PROMPT_STRUCTURED_PACD},
+            {"type": "text", "text": _SYSTEM_PROMPT_PACD_RAW},
             {"type": "image_url", "image_url": {"url": image_b64}},
         ]
     )
-    result = llm.invoke([message])
-    return result  # type: ignore[return-value]
+    response = llm.invoke([message])
+    raw = str(response.content).strip()
+    result = _parse_raw_json(raw, page_num)
+    if result is None:
+        result = _text_llm_fallback(raw, page_num)
+    return result
+
+
+def _parse_raw_json(raw: str, page_num: int) -> PageStructuredExtraction | None:
+    """Strip LLM artifacts then construct PageStructuredExtraction from the JSON."""
+    # Remove <think>...</think> blocks
+    if "<think>" in raw:
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    # Strip markdown code fences
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    # Extract first JSON object if there is surrounding prose
+    if not raw.startswith("{"):
+        m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        if m:
+            raw = m.group(0).strip()
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("expected JSON object")
+
+        items: list[LineItem] = []
+        for i, row in enumerate(data.get("line_items") or [], start=1):
+            if not isinstance(row, dict):
+                continue
+            row.setdefault("item_number", i)
+            # Drop null/empty values so Pydantic optional fields stay None
+            cleaned = {k: v for k, v in row.items() if v is not None and v != ""}
+            if not cleaned.get("description"):
+                continue
+            try:
+                items.append(LineItem(**cleaned))
+            except Exception:
+                logger.debug("_parse_raw_json p%d: skipping malformed item %d", page_num, i)
+
+        return PageStructuredExtraction(
+            doc_type=data.get("doc_type") or None,
+            is_continuation=bool(data.get("is_continuation", False)),
+            header_fields={
+                str(k): str(v)
+                for k, v in (data.get("header_fields") or {}).items()
+                if v is not None and v != ""
+            },
+            line_items=items,
+        )
+    except Exception as exc:
+        logger.warning("_parse_raw_json p%d: failed (%s)", page_num, exc)
+        return None
+
+
+def _text_llm_fallback(raw_text: str, page_num: int) -> PageStructuredExtraction | None:
+    """Use text-only LLM with structured output to parse what the vision LLM returned.
+
+    No image tokens involved, so the schema fits comfortably within the text
+    model's context window.
+    """
+    llm = get_structured_llm(PageStructuredExtraction, temperature=0.0, vision=False)
+    prompt = (
+        "Parse the following text extracted from a trade/shipping document page "
+        "into the required structured format.\n\n"
+        f"Extracted text:\n{raw_text[:4000]}"
+    )
+    try:
+        result = llm.invoke([HumanMessage(content=prompt)])
+        logger.info("_text_llm_fallback p%d: structured output succeeded", page_num)
+        return result  # type: ignore[return-value]
+    except Exception as exc:
+        logger.warning("_text_llm_fallback p%d: also failed — %s", page_num, exc)
+        return None
 
 
 def vision_extraction_node(state: GraphState) -> GraphState:
@@ -129,12 +207,13 @@ def vision_extraction_node(state: GraphState) -> GraphState:
         errors.append("vision_extraction_node: no page_images in state")
         return {**state, "errors": errors, "current_step": "vision_extraction_node"}  # type: ignore[return-value]
 
-    # ── PACD path: structured extraction ──────────────────────────────────────
+    # ── PACD path: two-stage extraction ────────────────────────────────────────────
     if doc_category == "pacd":
+        vision_llm = get_vision_llm(temperature=0.0)
         structured_pages: list[dict] = []
         for page_num, image_bytes in enumerate(page_images, start=1):
             try:
-                result = _extract_structured_pacd_page(image_bytes, page_num)
+                result = _extract_pacd_page_raw(vision_llm, image_bytes, page_num)
                 if result is not None:
                     page_data = result.model_dump()
                     page_data["page_num"] = page_num
