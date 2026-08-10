@@ -46,11 +46,10 @@ class DocumentChunkList(BaseModel):
 
 
 class ValidationQueryList(BaseModel):
-    """Up to 10 targeted verification queries generated from the COO document."""
+    """Up to all targeted verification queries generated from the COO document."""
 
     queries: list[str] = Field(
         description="Each query asks about one specific field visible on the COO.",
-        max_length=10,
     )
 
 
@@ -69,6 +68,13 @@ class AttributeResult(BaseModel):
     attribute: str = Field(description="Name of the field being validated")
     coo_value: str = Field(description="Value as stated on the COO")
     reference_value: str = Field(description="Value found in the reference documents")
+    source_doc: str = Field(
+        default="",
+        description=(
+            "Source document name the reference_value was drawn from "
+            "(e.g. 'Invoice INVEG25-71198'). Empty string if unknown."
+        ),
+    )
     status: VerificationStatus
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str = Field(description="One sentence justification")

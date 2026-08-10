@@ -12,10 +12,10 @@ import json
 import logging
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
 from app.core.config import settings
-from app.langgraph.llm import encode_image_for_llm, get_vision_llm
+from app.langgraph.llm import encode_image_for_llm, get_structured_llm, get_vision_llm
 from app.langgraph.schemas.graphrag_schemas import ValidationQueryList
 from app.langgraph.state import GraphState
 
@@ -51,6 +51,9 @@ def coo_transcription_node(state: GraphState) -> dict[str, Any]:
             "You are a document transcription assistant. "
             "Transcribe ALL text from this Certificate of Origin document exactly as it appears — "
             "including field labels, values, dates, codes, and signatures. "
+            "IMPORTANT — for tabular or columnar layouts: explicitly pair each column header with "
+            "its cell value on the same row, formatted as 'COLUMN_HEADER: VALUE'. "
+            "Do not emit a bare number or value without its corresponding column label. "
             "Preserve the original structure using newlines. Return only the raw transcription, no commentary."
         ),
     }]
@@ -71,41 +74,45 @@ def coo_transcription_node(state: GraphState) -> dict[str, Any]:
 
     # ── Step 2: Generate validation queries ──────────────────────────────────
     max_queries = settings.MAX_VALIDATION_QUERIES
-    schema_json = json.dumps(ValidationQueryList.model_json_schema(), indent=2)
 
-    query_prompt = f"""You are a trade compliance auditor. Look at this Certificate of Origin (COO) document and generate up to {max_queries} specific, concise verification queries that can be answered by searching the reference trade documents (invoice, packing list).
+    query_prompt = """You are a trade compliance auditor. Examine this Certificate of Origin (COO) document.
 
-Each query should:
-- Target one specific field (item name, HS code, quantity, net weight, gross weight, unit price, total value, origin country, exporter name, etc.)
-- Be phrased as a direct factual question (e.g. "What is the HS code for cocoa beans?")
-- Be independently searchable
+        Generate all search strings that will be used to retrieve matching chunks from the PACD reference documents (commercial invoice, packing list, bill of lading) stored in a vector database.
 
-Respond ONLY with a JSON object matching this schema:
-{schema_json}"""
+        RULES FOR EACH SEARCH STRING:
+        1. Include the ACTUAL VALUE read from the COO — not the field label or a question.
+            GOOD: "<company name> <address> consignee buyer"
+            BAD:  "What is the consignee name and address?"
+        2. Append 1-3 generic trade synonyms after the value to bridge terminology gaps
+            between the COO and PACD documents (e.g. a buyer may be labelled "CLIENT" on an invoice).
+            Common synonym groups:
+            exporter / seller / shipper / supplier
+            consignee / buyer / client / importer / livraison / delivery
+            port of loading / departure port / shipped from
+            port of discharge / destination port / delivered to
+            HS code / tariff heading / customs code
+            invoice number / bill number / reference number
+            invoice date / bill date / document date
+            gross weight / total weight
+        3. For weight fields: emit the weight value with its label exactly as printed on the
+            COO (e.g. the label the document itself uses). Append all common weight synonyms:
+            net weight / gross weight / total weight / weight / quantity weight.
+        4. Cover EVERY distinct field visible on the COO: exporter, consignee,
+            ports of loading and discharge, each line item (HS code, goods description,
+            quantity, weight, unit price, total value), invoice number, invoice date,
+            country of origin.
+        5. One field per search string — keep each string under 100 characters.
+
+        Respond ONLY with this exact JSON structure — a single object with a "queries" key containing a list of strings:
+        {{"queries": ["search string 1", "search string 2", "search string 3"]}}"""
 
     query_content = list(image_contents) + [{"type": "text", "text": query_prompt}]
 
-    system_text = (
-        "You are a precise data extraction assistant. "
-        "You MUST respond with valid JSON that matches the schema exactly. "
-        "Return ONLY the JSON object, no markdown fences, no extra text."
-    )
+    structured_llm = get_structured_llm(ValidationQueryList, temperature=0.0, vision=True)
 
     try:
-        response = llm.invoke([
-            SystemMessage(content=system_text),
-            HumanMessage(content=query_content),
-        ])
-        raw_json = response.content.strip()
-
-        # Handle markdown fences if present
-        if raw_json.startswith("```"):
-            raw_json = raw_json.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-        parsed = json.loads(raw_json)
-        query_list = ValidationQueryList(**parsed)
+        query_list: ValidationQueryList = structured_llm.invoke([HumanMessage(content=query_content)])  # type: ignore[assignment]
         validation_queries = query_list.queries[:max_queries]
-
     except Exception as exc:
         logger.warning("coo_transcription_node: query generation failed — %s", exc)
         # Fallback: extract basic queries from transcribed text

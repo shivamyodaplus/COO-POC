@@ -17,10 +17,8 @@ import logging
 import os
 from typing import Any
 
-from pydantic import ValidationError
-
 from app.core.config import settings
-from app.langgraph.llm import encode_image_for_llm, get_vision_llm
+from app.langgraph.llm import encode_image_for_llm, get_structured_llm
 from app.langgraph.schemas.graphrag_schemas import (
     MAX_CHUNK_TOPIC,
     DocumentChunkList,
@@ -85,8 +83,7 @@ RULES
   5. Do NOT invent data not on the document
   6. Do NOT add commentary outside the JSON
 
-Respond ONLY with a JSON object matching this schema (no markdown fences):
-{schema_json}"""
+Extract every field exactly as it appears — do not invent data, do not omit any visible field."""
 
 
 def vlm_chunking_node(state: GraphState) -> dict[str, Any]:
@@ -106,18 +103,9 @@ def vlm_chunking_node(state: GraphState) -> dict[str, Any]:
         }
 
     # Build the VLM message with all pages as images
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import HumanMessage
 
-    schema_json = json.dumps(DocumentChunkList.model_json_schema(), indent=2)
-    system_text = (
-        "You are a precise data extraction assistant. "
-        "You MUST respond with valid JSON that matches the schema exactly. "
-        "Return ONLY the JSON object, no markdown fences, no extra text."
-    )
-    prompt_text = _CHUNKING_PROMPT.format(
-        max_topic=MAX_CHUNK_TOPIC,
-        schema_json=schema_json,
-    )
+    prompt_text = _CHUNKING_PROMPT.format(max_topic=MAX_CHUNK_TOPIC)
 
     # Build multimodal content: images first, then instruction
     content: list[dict[str, Any]] = []
@@ -126,30 +114,10 @@ def vlm_chunking_node(state: GraphState) -> dict[str, Any]:
         content.append({"type": "image_url", "image_url": {"url": data_uri}})
     content.append({"type": "text", "text": prompt_text})
 
-    llm = get_vision_llm(temperature=0.0)
+    llm = get_structured_llm(DocumentChunkList, temperature=0.0, vision=True)
 
     try:
-        response = llm.invoke([
-            SystemMessage(content=system_text),
-            HumanMessage(content=content),
-        ])
-        raw_json = response.content.strip()
-
-        # Parse JSON — handle markdown fences if present
-        if raw_json.startswith("```"):
-            raw_json = raw_json.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-        parsed = json.loads(raw_json)
-        chunk_list = DocumentChunkList(**parsed)
-
-    except (json.JSONDecodeError, ValidationError) as exc:
-        logger.error("vlm_chunking_node: parsing failed — %s", exc)
-        return {
-            "pages_indexed": 0,
-            "extracted_kv_pairs": [],
-            "errors": state.get("errors", []) + [f"VLM chunking parse error: {exc}"],
-            "current_step": "vlm_chunking_node",
-        }
+        chunk_list: DocumentChunkList = llm.invoke([HumanMessage(content=content)])  # type: ignore[assignment]
     except Exception as exc:
         logger.error("vlm_chunking_node: VLM call failed — %s", exc)
         return {

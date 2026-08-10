@@ -197,6 +197,9 @@ def get_report(transaction_id: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             discrepancy_table = []
 
+    matched_count = sum(1 for r in discrepancy_table if r.get("verdict") == "match")
+    mismatched_count = sum(1 for r in discrepancy_table if r.get("verdict") == "mismatch")
+
     return {
         "id": str(row[0]),
         "transaction_id": str(row[1]),
@@ -205,6 +208,10 @@ def get_report(transaction_id: str) -> dict[str, Any] | None:
         "confirmed_template_name": row[4],
         "overall_verdict": row[5],
         "discrepancy_table": discrepancy_table,
+        "total_fields": len(discrepancy_table),
+        "matched": matched_count,
+        "mismatched": mismatched_count,
+        "not_found": len(discrepancy_table) - matched_count - mismatched_count,
         "narrative": row[7],
         "summary": row[8],
         "created_at": row[9].isoformat(),

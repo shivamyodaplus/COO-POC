@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # Chat Completions endpoint (https://bedrock-mantle.<region>.api.aws/v1).
     # Generate a key at: https://console.aws.amazon.com/bedrock/home#/api-keys/short-term/create
     BEDROCK_API_KEY: str = ""
-    BEDROCK_TEXT_MODEL: str = "qwen.qwen3-32b-v1:0"
+    BEDROCK_TEXT_MODEL: str = "qwen.qwen3-vl-235b-a22b-instruct"
     # BEDROCK_VISION_MODEL: str = "nvidia.nemotron-nano-12b-v2"
     # BEDROCK_VISION_MODEL: str = "anthropic.claude-sonnet-5"
     BEDROCK_VISION_MODEL: str = "anthropic.claude-sonnet-5"
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     # defaults to the model maximum, which combined with a large prompt can
     # exceed the total context window.  Override via BEDROCK_MAX_TOKENS in .env.
     # BEDROCK_MAX_TOKENS: int = 120000
-    BEDROCK_MAX_TOKENS: int = 30000
+    BEDROCK_MAX_TOKENS: int = 15000
 
     # BGE-M3 text embedding (PACD / COO cross-reference)
     BGE_M3_MODEL: str = "BAAI/bge-m3"
@@ -81,9 +81,9 @@ class Settings(BaseSettings):
     # Milvus collection for PACD reference chunks (2-tier GraphRAG).
     COO_REFERENCE_COLLECTION: str = "coo_reference_chunks"
     # Minimum cosine/IP score to keep a retrieved chunk.
-    SCORE_THRESHOLD: float = 0.3
+    SCORE_THRESHOLD: float = 0.5
     # Maximum number of validation queries generated from the COO.
-    MAX_VALIDATION_QUERIES: int = 10
+    MAX_VALIDATION_QUERIES: int = 15
     # Milvus ANN candidates fetched per individual hybrid search query.
     RAG_RETRIEVAL_TOP_K: int = 10
 

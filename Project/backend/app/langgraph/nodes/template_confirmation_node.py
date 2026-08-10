@@ -43,33 +43,71 @@ class _BatchMatchResult(BaseModel):
     reasoning: str = Field("", description="Brief explanation.")
 
 _SYSTEM_PROMPT = """\
-You are a document authentication expert.
+You are a strict document structure authentication expert.
 You are given a scanned COO (Certificate of Origin) document image and ONE reference template image.
 
-Determine whether the COO document was produced using this template.
-Compare: overall layout, logos, field labels, table structure, borders, and general formatting.
+Your task: determine whether the COO was printed on EXACTLY this template form.
+
+COMPARE THESE STRUCTURAL ELEMENTS — all must match:
+  1. Number, position, and labels of all form fields/boxes
+  2. Table structure: number of columns, column headers, row layout
+  3. Section order and grouping (header, body, footer blocks)
+  4. Logo(s): presence, position, and approximate shape
+  5. Border styles and ruling lines
+  6. Fixed pre-printed text (titles, instructions, country/authority names)
+
+STRICT RULES:
+  - Set is_match=true ONLY if ALL structural elements above are essentially identical.
+  - Any of the following MUST result in is_match=false:
+      • Different number of form fields or table columns
+      • Different section order or grouping
+      • Missing or extra logo
+      • Different fixed pre-printed text or title
+      • Different border/ruling layout
+  - Ignore: filled-in handwritten or typed values, stamps, signatures, scan quality,
+    paper colour, minor rotation, or background watermarks.
+  - "Close enough" or "similar purpose" is NOT sufficient — the blank form skeleton
+    must be structurally identical.
 
 Respond ONLY with a JSON object — no markdown, no prose:
 {
   "is_match": true,
-  "reasoning": "<brief explanation>"
+  "reasoning": "<one sentence listing the key structural elements that matched or the first element that differed>"
 }
-
-Set "is_match" to false if the documents clearly differ in structure or branding.
 """
 
 _SYSTEM_PROMPT_BATCH = """\
-You are a document authentication expert.
-You are given a scanned COO (Certificate of Origin) document image and several numbered reference \
-template images.
+You are a strict document structure authentication expert.
+You are given a scanned COO (Certificate of Origin) document image and several numbered reference\
+ template images.
 
-Identify which template (if any) was used to produce the COO document.
-Compare: overall layout, logos, field labels, table structure, borders, and general formatting.
+Your task: identify which template (if any) the COO was printed on — based on EXACT structural match.
+
+COMPARE THESE STRUCTURAL ELEMENTS — all must match for a template to be selected:
+  1. Number, position, and labels of all form fields/boxes
+  2. Table structure: number of columns, column headers, row layout
+  3. Section order and grouping (header, body, footer blocks)
+  4. Logo(s): presence, position, and approximate shape
+  5. Border styles and ruling lines
+  6. Fixed pre-printed text (titles, instructions, country/authority names)
+
+STRICT RULES:
+  - Select a template ONLY if ALL structural elements above are essentially identical.
+  - Return confirmed_template_id=null if no template meets ALL criteria.
+  - Any of the following MUST exclude a template:
+      • Different number of form fields or table columns
+      • Different section order or grouping
+      • Missing or extra logo
+      • Different fixed pre-printed text or title
+      • Different border/ruling layout
+  - Ignore: filled-in handwritten or typed values, stamps, signatures, scan quality,
+    paper colour, minor rotation, or background watermarks.
+  - "Close enough" or "similar purpose" is NOT sufficient.
 
 Respond ONLY with a JSON object — no markdown, no prose:
 {
   "confirmed_template_id": "<exact template id string, or null if none match>",
-  "reasoning": "<brief explanation>"
+  "reasoning": "<one sentence: which template matched and why, or why none matched>"
 }
 """
 

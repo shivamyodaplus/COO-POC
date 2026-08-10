@@ -130,6 +130,46 @@ async def run_coo_verification(
     report_data: dict[str, Any] = result.get("verification_report") or {}
     coo_doc_id = result.get("document_id") or ""
 
+    # ── Enrich report with fields the frontend/DB expect ──────────────────
+    # 1. Template confirmation (lives in graph state, not ValidationReport)
+    report_data["confirmed_template_id"] = result.get("confirmed_template_id")
+    report_data["confirmed_template_name"] = result.get("confirmed_template_name")
+
+    # 2. Convert validated_items → discrepancy_table (frontend row format)
+    _status_to_verdict = {
+        "PASS": "match",
+        "FAIL": "mismatch",
+        "UNVERIFIABLE": "not_found_in_pacd",
+    }
+    validated_items: list[dict[str, Any]] = report_data.pop("validated_items", [])
+    discrepancy_table = [
+        {
+            "field_key": item.get("attribute", ""),
+            "coo_value": item.get("coo_value", ""),
+            "pacd_value": item.get("reference_value", ""),
+            "verdict": _status_to_verdict.get(item.get("status", ""), "not_found_in_pacd"),
+            "pacd_source_doc": item.get("source_doc", ""),
+        }
+        for item in validated_items
+    ]
+    report_data["discrepancy_table"] = discrepancy_table
+
+    # 3. Aggregate counts used by the metrics row in the frontend
+    matched_count = sum(1 for r in discrepancy_table if r["verdict"] == "match")
+    mismatched_count = sum(1 for r in discrepancy_table if r["verdict"] == "mismatch")
+    report_data["total_fields"] = len(discrepancy_table)
+    report_data["matched"] = matched_count
+    report_data["mismatched"] = mismatched_count
+    report_data["not_found"] = len(discrepancy_table) - matched_count - mismatched_count
+
+    # 4. Build narrative from discrepancies list
+    discrepancies: list[str] = report_data.pop("discrepancies", [])
+    report_data["narrative"] = "\n\n".join(f"- {d}" for d in discrepancies) if discrepancies else ""
+
+    # 5. Map UNVERIFIABLE → INCONCLUSIVE for frontend _VERDICT_STYLE compat
+    if report_data.get("overall_verdict") == "UNVERIFIABLE":
+        report_data["overall_verdict"] = "INCONCLUSIVE"
+
     # Persist the report
     if report_data and transaction_id:
         try:

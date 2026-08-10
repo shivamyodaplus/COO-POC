@@ -12,9 +12,9 @@ import json
 import logging
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
-from app.langgraph.llm import get_llm
+from app.langgraph.llm import get_structured_llm
 from app.langgraph.schemas.graphrag_schemas import (
     ValidationReport,
     VerificationStatus,
@@ -79,7 +79,6 @@ def validation_node(state: GraphState) -> dict[str, Any]:
         }
 
     # Build the validation prompt
-    schema_json = json.dumps(ValidationReport.model_json_schema(), indent=2)
     ref_text = _format_reference_chunks(retrieved_chunks)
 
     prompt_text = f"""You are a strict trade compliance validator.
@@ -101,6 +100,9 @@ You MUST follow this protocol to prevent cross-item contamination:
                          e.g. "HS Code [Cocoa Beans]", "Net Weight [Coffee Beans]"
       - coo_value:       value exactly as stated on the COO for THAT item
       - reference_value: value from the MATCHING reference item only
+      - source_doc:      the "source" label from the [REF-xx] chunk you used
+                         e.g. "Invoice INVEG25-71198" or "Packing List PL-001"
+                         Leave empty string if the source is unknown.
       - status:          PASS / FAIL / UNVERIFIABLE
       - confidence:      0.0–1.0
       - reasoning:       one sentence
@@ -108,6 +110,7 @@ You MUST follow this protocol to prevent cross-item contamination:
   STEP 3 — DOCUMENT-LEVEL FIELDS:
     Validate document-level fields (exporter, consignee, ports, etc.) once,
     not per item.  attribute format: "<field_name> [Document]"
+    Fill source_doc the same way as STEP 2.
 
 ══════════════════════════════════════════════════════
 COMPARISON RULES
@@ -118,12 +121,17 @@ COMPARISON RULES
   • Different quantity units (kg vs Sacs): these are different measurement dimensions
     — mark UNVERIFIABLE with reasoning explaining the unit dimension mismatch
   • Numeric conflict after normalization → FAIL
+  • Field-label equivalence: trade documents use different labels for semantically equivalent
+    fields (e.g. one document calls a measurement "gross weight" while another calls it
+    "net weight"). When a field is absent on the COO under one label but a semantically
+    equivalent field IS present under a different label, use that equivalent value as the
+    coo_value and note the label difference in reasoning. Only set coo_value to
+    "Not specified" when NO weight/quantity measure of any kind is present on the COO
+    for that item. Never generate a separate attribute entry for a field that does not
+    appear on the COO document at all — skip it rather than marking it UNVERIFIABLE.
 
 overall_verdict: PASS only if all matched fields pass. FAIL if any field fails.
 transaction_id MUST be: "{transaction_id}"
-
-Respond ONLY with a JSON object matching this schema:
-{schema_json}
 
 COO DOCUMENT TEXT:
 {coo_text}
@@ -131,28 +139,10 @@ COO DOCUMENT TEXT:
 REFERENCE CHUNKS:
 {ref_text}"""
 
-    system_text = (
-        "You are a precise data extraction assistant. "
-        "You MUST respond with valid JSON that matches the schema exactly. "
-        "Return ONLY the JSON object, no markdown fences, no extra text."
-    )
-
-    llm = get_llm(temperature=0.0)
+    llm = get_structured_llm(ValidationReport, temperature=0.0)
 
     try:
-        response = llm.invoke([
-            SystemMessage(content=system_text),
-            HumanMessage(content=prompt_text),
-        ])
-        raw_json = response.content.strip()
-
-        # Handle markdown fences if present
-        if raw_json.startswith("```"):
-            raw_json = raw_json.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-        parsed = json.loads(raw_json)
-        report = ValidationReport(**parsed)
-
+        report: ValidationReport = llm.invoke([HumanMessage(content=prompt_text)])  # type: ignore[assignment]
     except Exception as exc:
         logger.error("validation_node: LLM validation failed — %s", exc)
         report = ValidationReport(
