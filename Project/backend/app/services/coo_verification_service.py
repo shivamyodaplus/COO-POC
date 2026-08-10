@@ -227,17 +227,11 @@ def _initial_state(
         "confirmed_template_name": None,
         "coo_extracted_fields": {},
         "coo_extracted_data": {},
-        "cross_reference_results": [],
-        "cross_reference_details": {},
         "verification_report": {},
-        "section_queries": {},
-        "header_verification_results": [],
-        "content_verification_results": [],
-        "footer_verification_results": [],
-        # Map-Reduce RAG pipeline fields
-        "multi_queries": {},
+        # GraphRAG pipeline fields
+        "coo_text": None,
+        "validation_queries": [],
         "retrieved_chunks": [],
-        "assembled_context": None,
         "errors": [],
         "current_step": None,
     }

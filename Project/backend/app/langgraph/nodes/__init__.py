@@ -2,32 +2,23 @@
 from app.langgraph.nodes.ingestion_node import ingestion_node
 from app.langgraph.nodes.classification_node import classification_node
 from app.langgraph.nodes.extraction_node import extraction_node
-from app.langgraph.nodes.vision_extraction_node import vision_extraction_node
-from app.langgraph.nodes.pacd_indexing_node import pacd_indexing_node
-from app.langgraph.nodes.pacd_structuring_node import pacd_structuring_node
-from app.langgraph.nodes.pacd_layout_chunking_node import pacd_layout_chunking_node
-from app.langgraph.nodes.multi_query_expansion_node import multi_query_expansion_node
-from app.langgraph.nodes.rag_retrieval_node import rag_retrieval_node
-from app.langgraph.nodes.context_assembly_node import context_assembly_node
-from app.langgraph.nodes.llm_critic_node import llm_critic_node
 from app.langgraph.nodes.template_attribute_node import template_attribute_node
 from app.langgraph.nodes.template_retrieval_node import template_retrieval_node
 from app.langgraph.nodes.template_confirmation_node import template_confirmation_node
-from app.langgraph.nodes.coo_extraction_node import coo_extraction_node
-from app.langgraph.nodes.cross_reference_node import cross_reference_node
-from app.langgraph.nodes.report_generation_node import report_generation_node
+from app.langgraph.nodes.vlm_chunking_node import vlm_chunking_node
+from app.langgraph.nodes.coo_transcription_node import coo_transcription_node
+from app.langgraph.nodes.parallel_search_node import parallel_search_node
+from app.langgraph.nodes.validation_node import validation_node
 
 __all__ = [
     "ingestion_node",
     "classification_node",
     "extraction_node",
-    "vision_extraction_node",
-    "pacd_indexing_node",
-    "pacd_structuring_node",
     "template_attribute_node",
     "template_retrieval_node",
     "template_confirmation_node",
-    "coo_extraction_node",
-    "cross_reference_node",
-    "report_generation_node",
+    "vlm_chunking_node",
+    "coo_transcription_node",
+    "parallel_search_node",
+    "validation_node",
 ]

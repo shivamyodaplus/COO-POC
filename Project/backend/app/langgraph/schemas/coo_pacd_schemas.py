@@ -1,13 +1,13 @@
 """
-Pydantic schemas for the COO / PACD cross-reference verification pipeline.
+Pydantic schemas for template retrieval, confirmation, and attribute extraction.
 
-Every node in the pipeline validates its input and output against one of the
-models defined here.  All models inherit ``NodeBase`` (strict, no extra fields).
+These schemas define the input/output contracts for the template-matching
+nodes in the COO verification workflow.
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -18,58 +18,10 @@ from pydantic import BaseModel, Field
 
 class NodeBase(BaseModel):
     model_config = {
-        "strict": False,   # allow coercion (e.g. int → float) for convenience
+        "strict": False,
         "extra": "forbid",
         "populate_by_name": True,
     }
-
-
-# --------------------------------------------------------------------------- #
-# Vision extraction (PACD page / template attribute)                          #
-# --------------------------------------------------------------------------- #
-
-class PageKVPair(NodeBase):
-    key: str = Field(..., description="Field name extracted from the document image.")
-    value: str = Field(..., description="Extracted field value as a string.")
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
-
-
-class VisionExtractionInput(NodeBase):
-    document_id: str
-    page_num: int = Field(..., ge=1)
-    image_b64: str = Field(..., description="Base64-encoded JPEG of the page.")
-    doc_category: Literal["pacd", "coo", "template"] = "pacd"
-    field_hints: list[str] = Field(
-        default_factory=list,
-        description="Optional list of field names to focus on (from confirmed template).",
-    )
-
-
-class VisionExtractionOutput(NodeBase):
-    document_id: str
-    page_num: int
-    kv_pairs: list[PageKVPair] = Field(default_factory=list)
-    raw_llm_response: str | None = None
-    errors: list[str] = Field(default_factory=list)
-
-
-# --------------------------------------------------------------------------- #
-# PACD indexing                                                                #
-# --------------------------------------------------------------------------- #
-
-class PACDIndexingInput(NodeBase):
-    document_id: str
-    user_id: str
-    transaction_id: str
-    filename: str
-    extracted_kv_pairs: list[dict[str, Any]]  # [{page, key, value, confidence}]
-    page_images: list[bytes]                  # per-page JPEG bytes
-
-
-class PACDIndexingOutput(NodeBase):
-    document_id: str
-    pages_indexed: int
-    errors: list[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -123,92 +75,4 @@ class TemplateConfirmationOutput(NodeBase):
     confirmed_template_id: str | None = None
     confirmed_template_name: str | None = None
     reasoning: str | None = None
-    errors: list[str] = Field(default_factory=list)
-
-
-# --------------------------------------------------------------------------- #
-# COO extraction                                                               #
-# --------------------------------------------------------------------------- #
-
-class COOExtractionInput(NodeBase):
-    document_id: str
-    coo_image_b64: str = Field(..., description="Base64-encoded JPEG of the COO page.")
-    template_attributes: dict[str, str] = Field(
-        default_factory=dict,
-        description="Field schema from the confirmed template (key → label).",
-    )
-
-
-class COOExtractionOutput(NodeBase):
-    coo_extracted_fields: dict[str, str] = Field(
-        default_factory=dict,
-        description="Flat dict of extracted field values from the COO document.",
-    )
-    raw_llm_response: str | None = None
-    errors: list[str] = Field(default_factory=list)
-
-
-# --------------------------------------------------------------------------- #
-# Cross-reference                                                              #
-# --------------------------------------------------------------------------- #
-
-class DiscrepancyItem(NodeBase):
-    field_key: str
-    coo_value: str | None = None
-    pacd_value: str | None = None
-    verdict: Literal["match", "mismatch", "not_found_in_pacd", "not_in_coo"] = "not_found_in_pacd"
-    pacd_source_doc: str | None = Field(None, description="Document ID where PACD value was found.")
-    pacd_source_page: int | None = None
-
-
-class CrossReferenceInput(NodeBase):
-    transaction_id: str
-    user_id: str
-    coo_extracted_fields: dict[str, str]
-    scope: Literal["single_transaction", "full_history"] = "single_transaction"
-    # full_history: include all transactions for this user_id (future use)
-
-
-class CrossReferenceOutput(NodeBase):
-    discrepancy_table: list[DiscrepancyItem] = Field(default_factory=list)
-    total_fields: int = 0
-    matched: int = 0
-    mismatched: int = 0
-    not_found: int = 0
-    errors: list[str] = Field(default_factory=list)
-
-
-# --------------------------------------------------------------------------- #
-# Verification report                                                          #
-# --------------------------------------------------------------------------- #
-
-class VerificationReport(NodeBase):
-    transaction_id: str
-    coo_doc_id: str
-    confirmed_template_id: str | None = None
-    confirmed_template_name: str | None = None
-    discrepancy_table: list[DiscrepancyItem] = Field(default_factory=list)
-    narrative: str = ""
-    summary: str = ""
-    total_fields: int = 0
-    matched: int = 0
-    mismatched: int = 0
-    not_found: int = 0
-    overall_verdict: Literal["PASS", "FAIL", "INCONCLUSIVE"] = "INCONCLUSIVE"
-
-
-class ReportGenerationInput(NodeBase):
-    transaction_id: str
-    coo_doc_id: str
-    confirmed_template_id: str | None = None
-    confirmed_template_name: str | None = None
-    discrepancy_table: list[DiscrepancyItem]
-    total_fields: int
-    matched: int
-    mismatched: int
-    not_found: int
-
-
-class ReportGenerationOutput(NodeBase):
-    report: VerificationReport
     errors: list[str] = Field(default_factory=list)

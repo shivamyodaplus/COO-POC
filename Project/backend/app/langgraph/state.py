@@ -61,26 +61,16 @@ class GraphState(TypedDict):
     confirmed_template_name: str | None
 
     # ------------------------------------------------------------------ #
-    # COO verification pipeline                                            #
+    # COO verification pipeline (2-Tier GraphRAG)                          #
     # ------------------------------------------------------------------ #
     coo_extracted_fields: dict[str, Any]       # flat fields from COO (backward compat)
     coo_extracted_data: dict[str, Any]         # structured: {"header_fields": {}, "line_items": []}
-    cross_reference_results: list[dict[str, Any]]  # list of DiscrepancyItem dicts
-    cross_reference_details: dict[str, Any]    # full structured results (headers + items)
-    verification_report: dict[str, Any]        # final report {table, narrative, summary}
+    verification_report: dict[str, Any]        # final report (ValidationReport dict)
 
-    # Section-based parallel verification (old pipeline — kept for compatibility)
-    section_queries: dict[str, Any]                    # {"header": [...], "content": [...], "footer": [...]}
-    header_verification_results: list[dict[str, Any]]  # verdicts from header_verification_node
-    content_verification_results: list[dict[str, Any]] # verdicts from content_verification_node
-    footer_verification_results: list[dict[str, Any]]  # verdicts from footer_verification_node
-
-    # ------------------------------------------------------------------ #
-    # Map-Reduce RAG pipeline (new COO verification flow)                  #
-    # ------------------------------------------------------------------ #
-    multi_queries: dict[str, Any]                # {"item_queries": [], "header_queries": [], ...}
-    retrieved_chunks: list[dict[str, Any]]       # chunks from rag_retrieval_node
-    assembled_context: str | None                # formatted XML context for llm_critic_node
+    # GraphRAG pipeline fields
+    coo_text: str | None                        # VLM-transcribed COO text
+    validation_queries: list[str]               # generated queries from COO
+    retrieved_chunks: list[dict[str, Any]]       # chunks from parallel_search_node
 
     # ------------------------------------------------------------------ #
     # Control flow                                                         #

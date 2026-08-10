@@ -28,7 +28,6 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     MILVUS_URI: str = "http://localhost:19530"
     MILVUS_COLLECTION: str = "templates"
-    PACD_MILVUS_COLLECTION: str = "pacd_coo_documents"
     HYBRID_ALPHA: float = 0.7
     POSTGRES_DSN: str = "postgresql://appuser:apppassword@localhost:5432/appdb"
     STORAGE_ADAPTER: str = "postgres"
@@ -78,36 +77,18 @@ class Settings(BaseSettings):
     # Override via LOCAL_STORAGE_DIR in .env if needed.
     LOCAL_STORAGE_DIR: str = str(_BASE_DIR)
 
-    # PACD chunking strategy
-    CHUNK_WINDOW: int = 5   # KV pairs per grouped chunk
-    CHUNK_STRIDE: int = 3   # stride between grouped chunks
-
-    # COO cross-reference: Milvus hits fetched per field query
-    CROSS_REF_TOP_K: int = 3
-
-    # ── Map-Reduce RAG pipeline (new COO verification flow) ──────────────────
-    # Name of the new granular PACD chunk collection.
-    PACD_CHUNK_COLLECTION: str = "pacd_document_chunks"
-    # Max line items per table chunk — splits large tables into multiple chunks
-    # so the embedding and LLM context stay manageable (20 items ≈ 4 KB text).
-    MAX_TABLE_ITEMS_PER_CHUNK: int = 20
-    # Milvus ANN candidates fetched per individual query (before RRF fusion).
+    # ── GraphRAG COO Verification Pipeline ───────────────────────────────────
+    # Milvus collection for PACD reference chunks (2-tier GraphRAG).
+    COO_REFERENCE_COLLECTION: str = "coo_reference_chunks"
+    # Minimum cosine/IP score to keep a retrieved chunk.
+    SCORE_THRESHOLD: float = 0.3
+    # Maximum number of validation queries generated from the COO.
+    MAX_VALIDATION_QUERIES: int = 10
+    # Milvus ANN candidates fetched per individual hybrid search query.
     RAG_RETRIEVAL_TOP_K: int = 10
-    # Final unique chunks returned after RRF fusion and deduplication.
-    RAG_FINAL_TOP_K: int = 8
-    # Max sibling table chunks fetched per logical document during table isolation.
-    TABLE_ISOLATION_MAX_CHUNKS: int = 10
 
     # COO template retrieval & confirmation
-    # How many candidate templates to fetch from Milvus.
-    # The confirmation node tries them one-by-one in similarity order, so
-    # raising this gives a better chance of finding the right template at the
-    # cost of additional Vision LLM calls in the worst case.
     COO_TEMPLATE_TOP_K: int = 3
-    # Max templates sent to the Vision LLM per call.
-    # Total images per call = 1 (COO) + COO_TEMPLATE_CONFIRM_BATCH.
-    # Set to 1 for LLMs that accept only 2 images; raise for models with a
-    # higher image-count limit to reduce the number of round-trips.
     COO_TEMPLATE_CONFIRM_BATCH: int = 1
 
 

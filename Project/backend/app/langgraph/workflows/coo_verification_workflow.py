@@ -1,5 +1,5 @@
 """
-COOVerificationWorkflow — Map-Reduce RAG pipeline for COO cross-reference.
+COOVerificationWorkflow — 2-Tier GraphRAG pipeline for COO cross-reference.
 
 Graph topology
 --------------
@@ -15,27 +15,16 @@ Graph topology
   template_confirmation_node  Vision LLM: confirm template match (skipped if no candidates)
       │
       ▼
-  coo_extraction_node         Vision LLM: extract COO header_fields + line_items
+  coo_transcription_node      Vision LLM: transcribe COO text + generate validation queries
       │
       ▼
-  multi_query_expansion_node  Text LLM: expand COO entities into 4 query categories
-      │                       (item / header / footer / hs queries)
+  parallel_search_node        BGE-M3 embed queries → parallel hybrid search on
+      │                       coo_reference_chunks (filter: transaction_id)
       ▼
-  rag_retrieval_node          Hybrid BGE-M3 search on pacd_document_chunks
-      │                       + table isolation (fetch all sibling table chunks)
-      ▼
-  context_assembly_node       Group and format retrieved chunks into structured XML
-      │
-      ▼
-  llm_critic_node             Single Text LLM call: verify COO vs condensed context
-      │                       → VerificationReport (same shape as before)
+  validation_node             Text LLM: per-attribute verification (PASS/FAIL/UNVERIFIABLE)
+      │                       → ValidationReport
       ▼
     END
-
-This replaces the old 3-way parallel verification (section_query_node +
-header/content/footer_verification_node + report_consolidation_node) with
-a Map-Reduce RAG approach that handles large PACD documents (50+ pages)
-without context window exhaustion.
 """
 
 from __future__ import annotations
@@ -43,14 +32,12 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from app.langgraph.nodes.coo_extraction_node import coo_extraction_node
-from app.langgraph.nodes.context_assembly_node import context_assembly_node
+from app.langgraph.nodes.coo_transcription_node import coo_transcription_node
 from app.langgraph.nodes.ingestion_node import ingestion_node
-from app.langgraph.nodes.llm_critic_node import llm_critic_node
-from app.langgraph.nodes.multi_query_expansion_node import multi_query_expansion_node
-from app.langgraph.nodes.rag_retrieval_node import rag_retrieval_node
+from app.langgraph.nodes.parallel_search_node import parallel_search_node
 from app.langgraph.nodes.template_confirmation_node import template_confirmation_node
 from app.langgraph.nodes.template_retrieval_node import template_retrieval_node
+from app.langgraph.nodes.validation_node import validation_node
 from app.langgraph.state import GraphState
 
 
@@ -62,7 +49,7 @@ def _after_ingestion(state: GraphState) -> str:
 
 def _after_retrieval(state: GraphState) -> str:
     if not state.get("retrieved_templates"):
-        return "coo_extraction_node"
+        return "coo_transcription_node"
     return "template_confirmation_node"
 
 
@@ -73,11 +60,9 @@ def build_coo_verification_workflow() -> CompiledStateGraph:
     graph.add_node("ingestion_node",              ingestion_node)
     graph.add_node("template_retrieval_node",      template_retrieval_node)
     graph.add_node("template_confirmation_node",   template_confirmation_node)
-    graph.add_node("coo_extraction_node",          coo_extraction_node)
-    graph.add_node("multi_query_expansion_node",   multi_query_expansion_node)
-    graph.add_node("rag_retrieval_node",           rag_retrieval_node)
-    graph.add_node("context_assembly_node",        context_assembly_node)
-    graph.add_node("llm_critic_node",              llm_critic_node)
+    graph.add_node("coo_transcription_node",       coo_transcription_node)
+    graph.add_node("parallel_search_node",         parallel_search_node)
+    graph.add_node("validation_node",              validation_node)
 
     # ── Edges ─────────────────────────────────────────────────────────────
     graph.add_edge(START, "ingestion_node")
@@ -92,16 +77,12 @@ def build_coo_verification_workflow() -> CompiledStateGraph:
         _after_retrieval,
         {
             "template_confirmation_node": "template_confirmation_node",
-            "coo_extraction_node":        "coo_extraction_node",
+            "coo_transcription_node":     "coo_transcription_node",
         },
     )
-    graph.add_edge("template_confirmation_node",  "coo_extraction_node")
-    graph.add_edge("coo_extraction_node",         "multi_query_expansion_node")
-    graph.add_edge("multi_query_expansion_node",  "rag_retrieval_node")
-    graph.add_edge("rag_retrieval_node",          "context_assembly_node")
-    graph.add_edge("context_assembly_node",       "llm_critic_node")
-    graph.add_edge("llm_critic_node",             END)
+    graph.add_edge("template_confirmation_node",  "coo_transcription_node")
+    graph.add_edge("coo_transcription_node",      "parallel_search_node")
+    graph.add_edge("parallel_search_node",        "validation_node")
+    graph.add_edge("validation_node",             END)
 
     return graph.compile()
-
-
