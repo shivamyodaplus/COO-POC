@@ -14,32 +14,42 @@ from pydantic import BaseModel, ConfigDict, Field
 # ── VARCHAR field length limits (must match Milvus schema) ────────────────────
 MAX_CHUNK_TOPIC = 200
 
+# Content type ordering for retrieval sort
+CONTENT_TYPE_ORDER = {"header": 0, "content": 1, "footer": 2}
 
-# ── Phase 1: Document chunking schemas ────────────────────────────────────────
+# Maximum characters per chunk before splitting
+MAX_CHUNK_SIZE = 1000
 
 
-class DocumentChunk(BaseModel):
-    """One logical section of a trade document as identified by the VLM."""
+# ── Phase 1: Page-section chunking schemas ────────────────────────────────────
+
+
+class PageSections(BaseModel):
+    """Three logical sections extracted from a single document page by the VLM."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    chunk_topic: str = Field(
-        max_length=MAX_CHUNK_TOPIC,
+    header: str = Field(
         description=(
-            f"Short label (≤{MAX_CHUNK_TOPIC} chars) describing what this section is about. "
-            "Examples: 'Invoice Header', 'Exporter Details', 'Line Item — Cocoa Beans', "
-            "'Invoice Totals', 'Packing Details'."
+            "Document-level identifiers at the top of the page: exporter, consignee, "
+            "certificate number, dates, invoice numbers, ports, payment terms, etc. "
+            "Copy ALL text VERBATIM. Return empty string if no header fields visible."
         ),
     )
-    raw_text: str = Field(
-        description="Verbatim text content of this chunk. Include ALL text — never truncate or omit data.",
+    content: str = Field(
+        description=(
+            "The body/transactional data: line items, goods descriptions, quantities, "
+            "weights, HS codes, prices, packing details, totals. "
+            "Copy ALL text VERBATIM. Return empty string if no content visible."
+        ),
     )
-
-
-class DocumentChunkList(BaseModel):
-    """All logical chunks extracted from a single document (or set of pages)."""
-
-    chunks: list[DocumentChunk]
+    footer: str = Field(
+        description=(
+            "Stamps, signatures, issuing authority seals, authentication marks, "
+            "certification notes at the bottom of the page. "
+            "Copy ALL text VERBATIM. Return empty string if no footer visible."
+        ),
+    )
 
 
 # ── Phase 2: Query generation schema ─────────────────────────────────────────

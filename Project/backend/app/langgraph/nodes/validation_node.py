@@ -25,8 +25,15 @@ logger = logging.getLogger(__name__)
 
 
 def _format_reference_chunks(chunks: list[dict[str, Any]]) -> str:
-    """Format retrieved chunks as structured context for the LLM."""
+    """Format retrieved chunks as structured context for the LLM.
+
+    Chunks are pre-sorted by source_document → page_number → content_type.
+    Groups chunks by file and page with visual separators for readability.
+    """
     lines = []
+    current_source = None
+    current_page = None
+
     for i, c in enumerate(chunks, 1):
         meta = {}
         if c.get("metadata_json"):
@@ -34,13 +41,32 @@ def _format_reference_chunks(chunks: list[dict[str, Any]]) -> str:
                 meta = json.loads(c["metadata_json"])
             except (json.JSONDecodeError, TypeError):
                 pass
+
+        page = meta.get("page_number", "?")
+        content_type = meta.get("content_type", "unknown")
+        source = meta.get("source_document", "N/A")
+
+        # Add document separator when transitioning to a new source file
+        if source != current_source:
+            if current_source is not None:
+                lines.append("\n" + "═" * 60)
+            lines.append(f"\n══════ DOCUMENT: {source} ══════")
+            current_source = source
+            current_page = None  # reset page tracking for new doc
+
+        # Add page separator when transitioning to a new page
+        if page != current_page:
+            if current_page is not None:
+                lines.append("\n" + "─" * 60)
+            lines.append(f"\n─── Page {page} ───")
+            current_page = page
+
         lines.append(
-            f"[REF-{i:02d}] score={c.get('score', 0):.3f}  "
-            f"topic='{meta.get('chunk_topic', 'N/A')}'  "
-            f"source='{meta.get('source_document', 'N/A')}'\n"
+            f"\n[REF-{i:02d}] [{content_type.upper()}]\n"
             f"{c.get('raw_text', '')}"
         )
-    return "\n\n".join(lines)
+
+    return "\n".join(lines)
 
 
 def validation_node(state: GraphState) -> dict[str, Any]:
@@ -87,11 +113,13 @@ def validation_node(state: GraphState) -> dict[str, Any]:
 MULTI-ITEM VALIDATION PROTOCOL
 ══════════════════════════════════════════════════════
 The COO and reference documents may contain MULTIPLE line items.
+The reference data below is organized by page and section (HEADER / CONTENT / FOOTER),
+presented in natural reading order for full context.
 You MUST follow this protocol to prevent cross-item contamination:
 
   STEP 1 — ITEM MATCHING:
     Identify each distinct line item in the COO (by description, item number, or HS code).
-    Find its MATCHING item in the reference chunks (match on goods description or HS code).
+    Find its MATCHING item in the reference data (match on goods description or HS code).
     If an item in the COO has no matching item in reference → all its fields are UNVERIFIABLE.
 
   STEP 2 — FIELD VALIDATION (per matched item pair only):
@@ -100,7 +128,7 @@ You MUST follow this protocol to prevent cross-item contamination:
                          e.g. "HS Code [Cocoa Beans]", "Net Weight [Coffee Beans]"
       - coo_value:       value exactly as stated on the COO for THAT item
       - reference_value: value from the MATCHING reference item only
-      - source_doc:      the "source" label from the [REF-xx] chunk you used
+      - source_doc:      the source document name from the page header
                          e.g. "Invoice INVEG25-71198" or "Packing List PL-001"
                          Leave empty string if the source is unknown.
       - status:          PASS / FAIL / UNVERIFIABLE
@@ -136,7 +164,7 @@ transaction_id MUST be: "{transaction_id}"
 COO DOCUMENT TEXT:
 {coo_text}
 
-REFERENCE CHUNKS:
+REFERENCE DATA (sorted by page, section: HEADER → CONTENT → FOOTER):
 {ref_text}"""
 
     llm = get_structured_llm(ValidationReport, temperature=0.0)

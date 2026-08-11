@@ -5,9 +5,14 @@ Converts uploaded PACD document pages into logical chunks via Vision LLM,
 embeds them with BGE-M3, and stores in the ``coo_reference_chunks`` Milvus
 collection.
 
-Two chunk types are produced:
-  1. Line Item chunks — one per product line, containing ALL fields for that item
-  2. Document-level field chunks — one per header field (exporter, consignee, etc.)
+Strategy: Each page is processed individually by the VLM which segments it into
+three logical sections:
+  1. Header — document-level identifiers (exporter, consignee, dates, ports, etc.)
+  2. Content — body/transactional data (line items, goods, quantities, prices, etc.)
+  3. Footer — stamps, signatures, issuing authority seals, certification notes
+
+Large sections (>1000 chars) are split into multiple chunks at line boundaries.
+During retrieval, chunks are sorted by page → content_type (H→C→F) for readability.
 """
 
 from __future__ import annotations
@@ -17,77 +22,101 @@ import logging
 import os
 from typing import Any
 
-from app.core.config import settings
+from langchain_core.messages import HumanMessage
+
 from app.langgraph.llm import encode_image_for_llm, get_structured_llm
-from app.langgraph.schemas.graphrag_schemas import (
-    MAX_CHUNK_TOPIC,
-    DocumentChunkList,
-)
+from app.langgraph.schemas.graphrag_schemas import MAX_CHUNK_SIZE, PageSections
 from app.langgraph.state import GraphState
 from app.models.embedding import embed_text_chunks
 from app.services.pacd_milvus_service import insert_reference_chunks
 
 logger = logging.getLogger(__name__)
 
-_CHUNKING_PROMPT = """You are a trade document field extractor. Extract all data from this trade document as a list of DocumentChunk objects using the TWO-TYPE chunking strategy below.
+_CHUNKING_PROMPT = """You are a trade document page segmenter. Analyze this SINGLE page of a trade document and divide ALL visible text into exactly three sections.
 
 ══════════════════════════════════════════════════════
-TYPE 1 — LINE ITEM CHUNKS  (one chunk per product line)
+HEADER — Document-level identifiers (top of page)
 ══════════════════════════════════════════════════════
-Each distinct product / goods line gets its OWN chunk containing ALL its fields.
-This is critical: mixing fields from different items into one chunk is FORBIDDEN.
-
-  chunk_topic format : "Line Item <N> — <Item Description>"
-                       e.g. "Line Item 1 — Cocoa Beans"
-                            "Line Item 2 — Coffee Beans"
-
-  raw_text must contain ALL of the following visible for that item,
-  formatted as "FIELD_LABEL: VALUE" pairs separated by " | ":
-    • Item description / goods description   (verbatim)
-    • HS Code / Tariff Heading
-    • Quantity  (number + unit, e.g. "500 Sacs")
-    • Net Weight  (with unit)
-    • Gross Weight  (with unit)
-    • Unit Price  (with currency)
-    • Total / Line Value  (with currency)
-    • Country of Origin
-    • Item marks, grades, or codes
-
-  Example:
-    chunk_topic: "Line Item 1 — Cocoa Beans"
-    raw_text:    "Description: COCOA BEANS, RAW, WHOLE, GRADE I | HS Code: 1801.00 |
-                  Qty: 500 Sacs | Net Weight: 24,750.00 Kg | Gross Weight: 25,000.00 Kg |
-                  Unit Price: USD 110.00/Sac | Total Value: USD 55,000.00 | Origin: Egypt"
+Include ALL of the following if visible on this page:
+  • Exporter name & address
+  • Importer / Consignee name & address
+  • Notify Party
+  • Invoice Number & Date
+  • Certificate Number & Issue Date
+  • Port of Loading / Port of Discharge
+  • Bill of Lading / AWB Number
+  • Payment Terms / Incoterms
+  • Country of Origin (document-level declaration)
+  • Any other document identifiers, reference numbers, or party details at the top
 
 ══════════════════════════════════════════════════════
-TYPE 2 — DOCUMENT-LEVEL FIELD CHUNKS  (one chunk per header field)
+CONTENT — Body / transactional data (middle of page)
 ══════════════════════════════════════════════════════
-One chunk per document header field. Do not combine multiple header fields.
+Include ALL of the following if visible on this page:
+  • Line items / goods descriptions
+  • HS Codes / Tariff Headings
+  • Quantities (number + unit)
+  • Net Weight / Gross Weight
+  • Unit Prices / Total Values
+  • Packing details, marks, grades
+  • Totals, subtotals, summaries
+  • Any tabular or list data describing the goods
 
-  Fields to extract:  Exporter name & address, Importer/Consignee name & address,
-                      Notify Party, Invoice Number & Date, Certificate Number & Issue Date,
-                      Port of Loading, Port of Discharge, Bill of Lading / AWB Number,
-                      Payment Terms, Incoterms, Issuing Authority.
-
-  Example:
-    chunk_topic: "Exporter"
-    raw_text:    "Exporter: ACME Trading Co. Ltd, 12 Nile Street, Cairo, Egypt"
+══════════════════════════════════════════════════════
+FOOTER — Authentication marks (bottom of page)
+══════════════════════════════════════════════════════
+Include ALL of the following if visible on this page:
+  • Stamps (official, customs, chamber of commerce)
+  • Signatures (authorized signatory, representative)
+  • Issuing authority seals
+  • Certification notes / authentication marks
+  • Date and place of issue (if at the bottom)
 
 ══════════════════════════════════════════════════════
 RULES
 ══════════════════════════════════════════════════════
-  1. chunk_topic ≤ {max_topic} chars
-  2. Copy ALL values VERBATIM — never normalize, convert units, or rephrase
-  3. NEVER mix fields from two different line items into one chunk
-  4. Never omit a visible field — zero data loss
-  5. Do NOT invent data not on the document
-  6. Do NOT add commentary outside the JSON
+  1. Copy ALL text VERBATIM — never normalize, convert, summarize, or rephrase
+  2. Never omit any visible text — zero data loss
+  3. If a section has no content on this page, return an empty string for it
+  4. Do NOT invent data not on the document
+  5. Do NOT add commentary outside the JSON
+  6. Preserve line breaks and formatting as closely as possible
 
-Extract every field exactly as it appears — do not invent data, do not omit any visible field."""
+Extract every field exactly as it appears on this page."""
+
+
+def _split_text(text: str, max_size: int = MAX_CHUNK_SIZE) -> list[str]:
+    """Split text into chunks of approximately max_size at line boundaries."""
+    if not text or len(text) <= max_size:
+        return [text] if text else []
+
+    lines = text.split("\n")
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1  # +1 for newline
+        if current and (current_len + line_len) > max_size:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_len = line_len
+        else:
+            current.append(line)
+            current_len += line_len
+
+    if current:
+        chunks.append("\n".join(current))
+
+    return chunks
 
 
 def vlm_chunking_node(state: GraphState) -> dict[str, Any]:
-    """Extract logical chunks from PACD document pages via Vision LLM."""
+    """Extract logical chunks from PACD document pages via Vision LLM.
+
+    Processes each page individually, segments into Header/Content/Footer,
+    splits large sections, embeds with BGE-M3, and stores in Milvus.
+    """
     page_images: list[bytes] = state.get("page_images") or []
     transaction_id: str = state.get("transaction_id") or ""
     filename: str = state.get("filename") or "unknown"
@@ -102,57 +131,65 @@ def vlm_chunking_node(state: GraphState) -> dict[str, Any]:
             "current_step": "vlm_chunking_node",
         }
 
-    # Build the VLM message with all pages as images
-    from langchain_core.messages import HumanMessage
+    llm = get_structured_llm(PageSections, temperature=0.0, vision=True)
+    all_chunks: list[dict[str, Any]] = []
+    errors: list[str] = list(state.get("errors", []))
 
-    prompt_text = _CHUNKING_PROMPT.format(max_topic=MAX_CHUNK_TOPIC)
-
-    # Build multimodal content: images first, then instruction
-    content: list[dict[str, Any]] = []
-    for img_bytes in page_images:
+    # Process each page individually
+    for page_num, img_bytes in enumerate(page_images, 1):
         data_uri = encode_image_for_llm(img_bytes)
-        content.append({"type": "image_url", "image_url": {"url": data_uri}})
-    content.append({"type": "text", "text": prompt_text})
+        content: list[dict[str, Any]] = [
+            {"type": "image_url", "image_url": {"url": data_uri}},
+            {"type": "text", "text": _CHUNKING_PROMPT},
+        ]
 
-    llm = get_structured_llm(DocumentChunkList, temperature=0.0, vision=True)
+        try:
+            page_sections: PageSections = llm.invoke([HumanMessage(content=content)])  # type: ignore[assignment]
+        except Exception as exc:
+            logger.error(
+                "vlm_chunking_node: VLM failed on page %d — %s", page_num, exc
+            )
+            errors.append(f"VLM chunking failed on page {page_num}: {exc}")
+            continue
 
-    try:
-        chunk_list: DocumentChunkList = llm.invoke([HumanMessage(content=content)])  # type: ignore[assignment]
-    except Exception as exc:
-        logger.error("vlm_chunking_node: VLM call failed — %s", exc)
+        # Build chunks for each non-empty section
+        for content_type in ("header", "content", "footer"):
+            section_text: str = getattr(page_sections, content_type, "").strip()
+            if not section_text:
+                continue
+
+            # Split large sections into multiple chunks
+            text_parts = _split_text(section_text)
+            for sub_idx, part in enumerate(text_parts, 1):
+                chunk_id = (
+                    f"{transaction_id}__p{page_num:02d}_{content_type}_{sub_idx:02d}"
+                )
+                all_chunks.append({
+                    "chunk_id": chunk_id,
+                    "transaction_id": transaction_id,
+                    "source_document": source_doc,
+                    "page_number": page_num,
+                    "content_type": content_type,
+                    "chunk_index": sub_idx,
+                    "raw_text": part,
+                })
+
+    if not all_chunks:
+        logger.warning("vlm_chunking_node: no chunks produced from %d pages", len(page_images))
         return {
             "pages_indexed": 0,
             "extracted_kv_pairs": [],
-            "errors": state.get("errors", []) + [f"VLM chunking failed: {exc}"],
+            "errors": errors + ["VLM returned no content from any page"],
             "current_step": "vlm_chunking_node",
         }
-
-    if not chunk_list.chunks:
-        logger.warning("vlm_chunking_node: VLM returned 0 chunks")
-        return {
-            "pages_indexed": 0,
-            "extracted_kv_pairs": [],
-            "errors": state.get("errors", []) + ["VLM returned no chunks"],
-            "current_step": "vlm_chunking_node",
-        }
-
-    # Enrich chunks with IDs
-    enriched: list[dict[str, Any]] = []
-    for i, chunk in enumerate(chunk_list.chunks, 1):
-        enriched.append({
-            "chunk_id": f"{transaction_id}__chunk_{i:03d}",
-            "transaction_id": transaction_id,
-            "source_document": source_doc,
-            "chunk_topic": chunk.chunk_topic,
-            "raw_text": chunk.raw_text,
-        })
 
     logger.info(
-        "vlm_chunking_node: %d chunks extracted from '%s'", len(enriched), source_doc
+        "vlm_chunking_node: %d chunks from %d pages of '%s'",
+        len(all_chunks), len(page_images), source_doc,
     )
 
     # Embed all chunk texts with BGE-M3
-    texts = [c["raw_text"] for c in enriched]
+    texts = [c["raw_text"] for c in all_chunks]
     try:
         dense_vecs, sparse_vecs = embed_text_chunks(texts)
     except Exception as exc:
@@ -160,20 +197,22 @@ def vlm_chunking_node(state: GraphState) -> dict[str, Any]:
         return {
             "pages_indexed": 0,
             "extracted_kv_pairs": [],
-            "errors": state.get("errors", []) + [f"Embedding failed: {exc}"],
+            "errors": errors + [f"Embedding failed: {exc}"],
             "current_step": "vlm_chunking_node",
         }
 
     # Build Milvus records
     records: list[dict[str, Any]] = []
-    for i, chunk_data in enumerate(enriched):
+    for i, chunk_data in enumerate(all_chunks):
         records.append({
             "item_id": chunk_data["chunk_id"][:128],
             "transaction_id": chunk_data["transaction_id"][:64],
             "source_document": chunk_data["source_document"][:256],
             "raw_text": chunk_data["raw_text"][:65535],
             "metadata_json": json.dumps({
-                "chunk_topic": chunk_data["chunk_topic"][:MAX_CHUNK_TOPIC],
+                "page_number": chunk_data["page_number"],
+                "content_type": chunk_data["content_type"],
+                "chunk_index": chunk_data["chunk_index"],
                 "source_document": chunk_data["source_document"][:200],
             })[:2048],
             "dense_vector": dense_vecs[i],
@@ -189,13 +228,17 @@ def vlm_chunking_node(state: GraphState) -> dict[str, Any]:
 
     # Build backward-compatible extracted_kv_pairs for API response
     kv_pairs = [
-        {"page": 1, "key": c["chunk_topic"], "value": c["raw_text"][:200]}
-        for c in enriched
+        {
+            "page": c["page_number"],
+            "key": f"{c['content_type']} (p{c['page_number']})",
+            "value": c["raw_text"][:200],
+        }
+        for c in all_chunks
     ]
 
     return {
         "pages_indexed": n_inserted,
         "extracted_kv_pairs": kv_pairs,
-        "errors": state.get("errors", []),
+        "errors": errors,
         "current_step": "vlm_chunking_node",
     }

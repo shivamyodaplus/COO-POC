@@ -8,11 +8,13 @@ Deduplicates results by chunk_id (keeps highest score).
 
 from __future__ import annotations
 
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from app.core.config import settings
+from app.langgraph.schemas.graphrag_schemas import CONTENT_TYPE_ORDER
 from app.langgraph.state import GraphState
 from app.models.embedding import embed_text_queries
 from app.services.pacd_milvus_service import hybrid_search_reference
@@ -106,7 +108,22 @@ def parallel_search_node(state: GraphState) -> dict[str, Any]:
         if cid not in best or hit["score"] > best[cid]["score"]:
             best[cid] = hit
 
-    retrieved_chunks = sorted(best.values(), key=lambda h: h["score"], reverse=True)
+    # Sort by source_document → page_number → content_type (H→C→F) → chunk_index
+    # This ensures the validation LLM sees data grouped by file, in reading order
+    def _sort_key(chunk: dict[str, Any]) -> tuple[str, int, int, int]:
+        meta = {}
+        if chunk.get("metadata_json"):
+            try:
+                meta = json.loads(chunk["metadata_json"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        source = meta.get("source_document", "")
+        page = meta.get("page_number", 999)
+        ctype = CONTENT_TYPE_ORDER.get(meta.get("content_type", ""), 9)
+        cidx = meta.get("chunk_index", 0)
+        return (source, page, ctype, cidx)
+
+    retrieved_chunks = sorted(best.values(), key=_sort_key)
 
     logger.info(
         "parallel_search_node: %d queries → %d total hits → %d unique chunks",
